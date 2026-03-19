@@ -1,0 +1,23 @@
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - unused
+    - gocritic
+    - misspell
+    - prealloc
+    - unconvert
+    - unparam
+
+formatters:
+  enable:
+    - goimports
+
+linters-settings:
+  goimports:
+    local-prefixes:
+      - gorena/server

@@ -1,0 +1,15 @@
+.cache
+.claude
+.codex
+.DS_Store
+
+.idea
+bin
+obj
+
+Library
+Logs
+Temp
+UserSettings
+
+ragon
