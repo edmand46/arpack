@@ -20,7 +20,7 @@ Built for game networking where every byte and allocation matters.
 ## Installation
 
 ```bash
-go install edmand46/apack@latest
+go install edmand46/arpack/cmd/arpack@latest
 ```
 
 ## Usage
@@ -139,8 +139,8 @@ Uses unsafe pointers for zero-copy serialization. Returns bytes written/consumed
 
 ```bash
 # Unit tests (parser + generator)
-go test ./tools/arpack/...
+go test ./parser/... ./generator/...
 
 # End-to-end cross-language tests (requires dotnet SDK)
-go test ./tools/arpack/e2e/...
+go test ./e2e/...
 ```
