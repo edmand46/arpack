@@ -143,8 +143,9 @@ Uses unsafe pointers for zero-copy serialization. Returns bytes written/consumed
 - Booleans packed as bitfields (LSB first, up to 8 per byte)
 - Quantized floats stored as `uint8` or `uint16`
 
-## Benchmarks Go Results (M3 Max)
+## Benchmarks 
 
+### Go Results (M3 Max)
 ```
 BenchmarkArPack_Marshal-16        382568360    9.5 ns/op    5065 MB/s    0 B/op    0 allocs/op
 BenchmarkArPack_Unmarshal-16       98895892   34.6 ns/op    1388 MB/s   40 B/op    2 allocs/op
@@ -164,7 +165,7 @@ BenchmarkFlatBuffers_Unmarshal-16  56095480   64.8 ns/op    2345 MB/s   24 B/op 
 go test ./benchmarks/... -bench=. -benchmem
 ```
 
-### Benchmarks Unity Mono (M3 Max)
+### Unity Mono (M3 Max)
 
 ```
 ArPack Serialize:           96.7 ns/op |    0 B/op
