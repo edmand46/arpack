@@ -4,8 +4,9 @@
 
 # ArPack
 
-[![Tests](https://github.com/edmand46/arpack/actions/workflows/tests.yml/badge.svg)](https://github.com/edmand46/arpack/actions/workflows/tests.yml)
+![Tests](https://github.com/edmand46/arpack/actions/workflows/tests.yml/badge.svg)
 ![GitHub Tag](https://img.shields.io/github/v/tag/edmand46/arpack)
+![GitHub License](https://img.shields.io/github/license/edmand46/arpack)
 
 
 Binary serialization code generator for Go, C#, and TypeScript. Define messages once as Go structs — get zero-allocation `Marshal`/`Unmarshal` for Go, `unsafe` pointer-based `Serialize`/`Deserialize` for C#, and `DataView`-based serialization for TypeScript/browser.
