@@ -2,8 +2,8 @@ package e2e
 
 import (
 	"bytes"
-	"edmand46/arpack/generator"
-	"edmand46/arpack/parser"
+	"github.com/edmand46/arpack/generator"
+	"github.com/edmand46/arpack/parser"
 	"fmt"
 	"math"
 	"os"

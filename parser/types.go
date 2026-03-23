@@ -1,6 +1,5 @@
 package parser
 
-// PrimitiveKind — конкретный примитивный тип.
 type PrimitiveKind int
 
 const (
@@ -18,24 +17,21 @@ const (
 	KindString
 )
 
-// FieldKind — категория поля.
 type FieldKind int
 
 const (
-	KindPrimitive  FieldKind = iota // float, int, uint, bool, string
-	KindNested                      // ссылка на другой Message
-	KindFixedArray                  // [N]T
-	KindSlice                       // []T
+	KindPrimitive FieldKind = iota
+	KindNested
+	KindFixedArray
+	KindSlice
 )
 
-// QuantInfo описывает квантизацию float → uint8/uint16.
 type QuantInfo struct {
 	Min  float64
 	Max  float64
-	Bits int // 8 или 16, default 16
+	Bits int // 8 or 16, default 16
 }
 
-// MaxUint — максимальное целое значение для данного числа бит.
 func (q *QuantInfo) MaxUint() float64 {
 	if q.Bits == 8 {
 		return 255
@@ -43,31 +39,24 @@ func (q *QuantInfo) MaxUint() float64 {
 	return 65535
 }
 
-// WireBytes — размер на проводе в байтах.
 func (q *QuantInfo) WireBytes() int {
 	return q.Bits / 8
 }
 
-// Field — одно поле структуры-сообщения.
 type Field struct {
 	Name string
 	Kind FieldKind
 
-	// KindPrimitive
 	Primitive PrimitiveKind
 	NamedType string
-	Quant     *QuantInfo // nil если нет квантизации
+	Quant     *QuantInfo
 
-	// KindNested
 	TypeName string
 
-	// KindFixedArray / KindSlice
 	Elem     *Field
-	FixedLen int // >0 только для KindFixedArray
+	FixedLen int
 }
 
-// WireSize — размер в байтах на проводе.
-// Возвращает -1 для полей переменного размера.
 func (f *Field) WireSize() int {
 	switch f.Kind {
 	case KindPrimitive:
@@ -76,7 +65,7 @@ func (f *Field) WireSize() int {
 		}
 		return primitiveWireSize(f.Primitive)
 	case KindNested:
-		return -1 // зависит от конкретного типа, узнаём через Message.MinWireSize
+		return -1
 	case KindFixedArray:
 		elemSize := f.Elem.WireSize()
 		if elemSize == -1 {
@@ -84,7 +73,7 @@ func (f *Field) WireSize() int {
 		}
 		return f.FixedLen * elemSize
 	case KindSlice:
-		return -1 // uint16 len + переменная часть
+		return -1
 	}
 	return 0
 }
@@ -105,7 +94,6 @@ func primitiveWireSize(k PrimitiveKind) int {
 	return 0
 }
 
-// IsIntegralPrimitive — подходит ли тип как базовый для enum.
 func IsIntegralPrimitive(k PrimitiveKind) bool {
 	switch k {
 	case KindInt8, KindInt16, KindInt32, KindInt64, KindUint8, KindUint16, KindUint32, KindUint64:
@@ -114,7 +102,6 @@ func IsIntegralPrimitive(k PrimitiveKind) bool {
 	return false
 }
 
-// GoTypeName — имя типа в Go.
 func (f *Field) GoTypeName() string {
 	switch f.Kind {
 	case KindPrimitive:
@@ -132,7 +119,6 @@ func (f *Field) GoTypeName() string {
 	return "unknown"
 }
 
-// CSharpTypeName — имя типа в C#.
 func (f *Field) CSharpTypeName() string {
 	switch f.Kind {
 	case KindPrimitive:
@@ -180,7 +166,6 @@ func primitiveGoName(k PrimitiveKind) string {
 	return "unknown"
 }
 
-// GoPrimitiveTypeName — базовый примитивный тип поля в Go.
 func (f *Field) GoPrimitiveTypeName() string {
 	return primitiveGoName(f.Primitive)
 }
@@ -215,7 +200,6 @@ func primitiveCSharpName(k PrimitiveKind) string {
 	return "unknown"
 }
 
-// CSharpPrimitiveTypeName — базовый примитивный тип поля в C#.
 func (f *Field) CSharpPrimitiveTypeName() string {
 	return primitiveCSharpName(f.Primitive)
 }
@@ -234,42 +218,35 @@ func itoa(n int) string {
 	return string(buf[pos:])
 }
 
-// Message — описание одной структуры-сообщения.
 type Message struct {
 	PackageName string
 	Name        string
 	Fields      []Field
 }
 
-// EnumValue — одно именованное значение enum.
 type EnumValue struct {
 	Name  string
 	Value string
 }
 
-// Enum — enum-подобный тип на основе именованного примитива.
 type Enum struct {
 	Name      string
 	Primitive PrimitiveKind
 	Values    []EnumValue
 }
 
-// Schema — полная модель входного файла.
 type Schema struct {
 	PackageName string
 	Messages    []Message
 	Enums       []Enum
 }
 
-// MinWireSize — минимальный гарантированный размер в байтах.
-// Для вложенных типов считается только если размер известен заранее.
-// Строки и слайсы считаются как 2 байта (length prefix).
 func (m *Message) MinWireSize() int {
 	total := 0
 	for _, f := range m.Fields {
 		s := f.WireSize()
 		if s == -1 {
-			total += 2 // минимум: length prefix
+			total += 2
 		} else {
 			total += s
 		}
@@ -277,7 +254,6 @@ func (m *Message) MinWireSize() int {
 	return total
 }
 
-// HasVariableFields — есть ли поля переменного размера.
 func (m *Message) HasVariableFields() bool {
 	for _, f := range m.Fields {
 		if f.WireSize() == -1 {

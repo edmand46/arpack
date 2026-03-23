@@ -20,7 +20,7 @@ Built for game networking where every byte and allocation matters.
 ## Installation
 
 ```bash
-go install edmand46/arpack/cmd/arpack@latest
+go install github.com/edmand46/arpack/cmd/arpack@latest
 ```
 
 ## Usage

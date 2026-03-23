@@ -1,19 +1,16 @@
 package generator
 
 import (
-	"edmand46/arpack/parser"
+	"github.com/edmand46/arpack/parser"
 	"fmt"
 	"go/format"
 	"strings"
 )
 
-// GenerateGo генерирует Go-код сериализации для списка сообщений.
-// pkgName — имя пакета в котором будет сгенерированный файл.
 func GenerateGo(messages []parser.Message, pkgName string) ([]byte, error) {
 	return GenerateGoSchema(parser.Schema{Messages: messages}, pkgName)
 }
 
-// GenerateGoSchema генерирует Go-код сериализации для полной схемы.
 func GenerateGoSchema(schema parser.Schema, pkgName string) ([]byte, error) {
 	messages := schema.Messages
 	var b strings.Builder
@@ -46,7 +43,6 @@ func GenerateGoSchema(schema parser.Schema, pkgName string) ([]byte, error) {
 func writeGoMessage(b *strings.Builder, msg parser.Message) error {
 	segs := segmentFields(msg.Fields)
 
-	// Marshal
 	fmt.Fprintf(b, "func (m *%s) Marshal(buf []byte) []byte {\n", msg.Name)
 	for i, seg := range segs {
 		if seg.single != nil {
@@ -59,7 +55,6 @@ func writeGoMessage(b *strings.Builder, msg parser.Message) error {
 	}
 	b.WriteString("\treturn buf\n}\n\n")
 
-	// Unmarshal — возвращает кол-во потреблённых байт
 	fmt.Fprintf(b, "func (m *%s) Unmarshal(data []byte) (int, error) {\n", msg.Name)
 	minSize := packedMinWireSize(msg.Fields)
 	fmt.Fprintf(b, "\tif len(data) < %d {\n", minSize)
@@ -98,8 +93,6 @@ func writeGoBoolGroupUnmarshal(b *strings.Builder, recv string, bools []parser.F
 		fmt.Fprintf(b, "%s%s.%s = %s\n", indent, recv, f.Name, goUnmarshalValueExpr(expr, f))
 	}
 }
-
-// --- Marshal ---
 
 func writeGoMarshalField(b *strings.Builder, recv string, f parser.Field, indent string) error {
 	access := recv + "." + f.Name
@@ -196,8 +189,6 @@ func writeGoMarshalQuant(b *strings.Builder, access string, f parser.Field, inde
 	}
 	return nil
 }
-
-// --- Unmarshal ---
 
 func writeGoUnmarshalField(b *strings.Builder, recv string, f parser.Field, indent string) error {
 	access := recv + "." + f.Name
@@ -361,7 +352,6 @@ func goUnmarshalValueExpr(expr string, f parser.Field) string {
 	return f.NamedType + "(" + expr + ")"
 }
 
-// sanitizeVarName превращает "m.Pos[_i]" в "_mPos_i".
 func sanitizeVarName(s string) string {
 	var b strings.Builder
 	for _, c := range s {

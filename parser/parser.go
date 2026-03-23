@@ -12,7 +12,6 @@ import (
 	"strings"
 )
 
-// ParseFile парсит Go-файл и возвращает список сообщений.
 func ParseFile(path string) ([]Message, error) {
 	schema, err := ParseSchemaFile(path)
 	if err != nil {
@@ -21,7 +20,6 @@ func ParseFile(path string) ([]Message, error) {
 	return schema.Messages, nil
 }
 
-// ParseSource парсит исходный код из строки (удобно для тестов).
 func ParseSource(src string) ([]Message, error) {
 	schema, err := ParseSchemaSource(src)
 	if err != nil {
@@ -30,7 +28,6 @@ func ParseSource(src string) ([]Message, error) {
 	return schema.Messages, nil
 }
 
-// ParseSchemaFile парсит файл и возвращает полную схему: сообщения и enum-ы.
 func ParseSchemaFile(path string) (Schema, error) {
 	fset := token.NewFileSet()
 
@@ -42,7 +39,6 @@ func ParseSchemaFile(path string) (Schema, error) {
 	return parseASTFile(fset, f)
 }
 
-// ParseSchemaSource парсит исходник и возвращает полную схему.
 func ParseSchemaSource(src string) (Schema, error) {
 	fset := token.NewFileSet()
 
@@ -200,7 +196,7 @@ func parseStruct(
 
 	for _, astField := range st.Fields.List {
 		if len(astField.Names) == 0 {
-			continue // embedded field, пропускаем
+			continue
 		}
 
 		var rawTag string

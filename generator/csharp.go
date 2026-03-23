@@ -1,18 +1,15 @@
 package generator
 
 import (
-	"edmand46/arpack/parser"
+	"github.com/edmand46/arpack/parser"
 	"fmt"
 	"strings"
 )
 
-// GenerateCSharp генерирует C# unsafe код для списка сообщений.
-// namespace — пространство имён (например, "Ragono.Messages").
 func GenerateCSharp(messages []parser.Message, namespace string) ([]byte, error) {
 	return GenerateCSharpSchema(parser.Schema{Messages: messages}, namespace)
 }
 
-// GenerateCSharpSchema генерирует C# код для полной схемы, включая enum-ы.
 func GenerateCSharpSchema(schema parser.Schema, namespace string) ([]byte, error) {
 	messages := schema.Messages
 	var b strings.Builder
@@ -34,11 +31,9 @@ func GenerateCSharpSchema(schema parser.Schema, namespace string) ([]byte, error
 		enumNames[enum.Name] = struct{}{}
 	}
 
-	wroteSection := false
 	for _, enum := range schema.Enums {
 		writeCSharpEnum(&b, enum)
 		b.WriteString("\n")
-		wroteSection = true
 	}
 
 	for i, msg := range messages {
@@ -47,8 +42,6 @@ func GenerateCSharpSchema(schema parser.Schema, namespace string) ([]byte, error
 		}
 		if i < len(messages)-1 {
 			b.WriteString("\n")
-		} else if wroteSection {
-			// leave a single blank line between the last enum and the first struct only
 		}
 	}
 
@@ -75,13 +68,11 @@ func writeCSharpMessage(b *strings.Builder, msg parser.Message, enumNames map[st
 	b.WriteString(msg.Name)
 	b.WriteString("\n    {\n")
 
-	// Поля
 	for _, f := range msg.Fields {
 		fmt.Fprintf(b, "        public %s %s;\n", csharpTypeName(f, enumNames), f.Name)
 	}
 	b.WriteString("\n")
 
-	// Serialize
 	b.WriteString("        public int Serialize(byte* buffer)\n")
 	b.WriteString("        {\n")
 	b.WriteString("            byte* ptr = buffer;\n")
@@ -97,7 +88,6 @@ func writeCSharpMessage(b *strings.Builder, msg parser.Message, enumNames map[st
 	b.WriteString("            return (int)(ptr - buffer);\n")
 	b.WriteString("        }\n\n")
 
-	// Deserialize
 	fmt.Fprintf(b, "        public static int Deserialize(byte* buffer, out %s msg)\n", msg.Name)
 	b.WriteString("        {\n")
 	b.WriteString("            byte* ptr = buffer;\n")
@@ -134,8 +124,6 @@ func writeCSharpBoolGroupDeserialize(b *strings.Builder, recv string, bools []pa
 		fmt.Fprintf(b, "%s%s.%s = (%s & (1 << %d)) != 0;\n", indent, recv, f.Name, varName, bit)
 	}
 }
-
-// --- Serialize ---
 
 func writeCSharpSerializeField(b *strings.Builder, f parser.Field, indent string, enumNames map[string]struct{}) error {
 	switch f.Kind {
@@ -220,7 +208,6 @@ func writeCSharpSerializePrimitive(
 	case parser.KindUint64:
 		fmt.Fprintf(b, "%s*(ulong*)ptr = %s; ptr += 8;\n", indent, valueExpr)
 	case parser.KindString:
-		// UTF-8: uint16 byteCount + bytes
 		lenVar := "_slen" + sanitizeVarName(access)
 		fmt.Fprintf(b, "%sint %s = %s != null ? Encoding.UTF8.GetByteCount(%s) : 0;\n",
 			indent, lenVar, valueExpr, valueExpr)
@@ -249,8 +236,6 @@ func writeCSharpSerializeQuant(b *strings.Builder, access string, f parser.Field
 	}
 	return nil
 }
-
-// --- Deserialize ---
 
 func writeCSharpDeserializeField(
 	b *strings.Builder,

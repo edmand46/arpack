@@ -1,7 +1,7 @@
 package generator
 
 import (
-	"edmand46/arpack/parser"
+	"github.com/edmand46/arpack/parser"
 	"os"
 	"os/exec"
 	"path/filepath"

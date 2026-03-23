@@ -1,1 +1,1 @@
-module edmand46/arpack
+module github.com/edmand46/arpack

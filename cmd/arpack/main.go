@@ -1,8 +1,8 @@
 package main
 
 import (
-	"edmand46/arpack/generator"
-	"edmand46/arpack/parser"
+	"github.com/edmand46/arpack/generator"
+	"github.com/edmand46/arpack/parser"
 	"flag"
 	"fmt"
 	"log"
