@@ -44,6 +44,8 @@ func main() {
 		if pkgName == "." || pkgName == "" {
 			pkgName = msgs[0].PackageName
 		}
+		// Replace hyphens with underscores for valid Go package names
+		pkgName = strings.ReplaceAll(pkgName, "-", "_")
 
 		src, err := generator.GenerateGoSchema(schema, pkgName)
 		if err != nil {
