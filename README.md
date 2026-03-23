@@ -4,16 +4,19 @@
 
 # ArPack
 
-Binary serialization code generator for Go and C#. Define messages once as Go structs — get zero-allocation `Marshal`/`Unmarshal` for Go and `unsafe` pointer-based `Serialize`/`Deserialize` for C#.
+[![Tests](https://github.com/edmand46/arpack/actions/workflows/tests.yml/badge.svg)](https://github.com/edmand46/arpack/actions/workflows/tests.yml)
+
+Binary serialization code generator for Go, C#, and TypeScript. Define messages once as Go structs — get zero-allocation `Marshal`/`Unmarshal` for Go, `unsafe` pointer-based `Serialize`/`Deserialize` for C#, and `DataView`-based serialization for TypeScript/browser.
 
 ## Features
 
-- **Single source of truth** — define messages in Go, generate both Go and C# code
+- **Single source of truth** — define messages in Go, generate code for Go, C#, and TypeScript
 - **Float quantization** — compress `float32`/`float64` to 8 or 16 bits with a `pack` struct tag
 - **Boolean packing** — consecutive `bool` fields are packed into single bytes (up to 8 per byte)
-- **Enums** — `type Opcode uint16` + `const` block becomes a C# `enum`
+- **Enums** — `type Opcode uint16` + `const` block becomes C#/TypeScript enums
 - **Nested types, fixed arrays, slices** — full support for complex message structures
-- **Cross-language binary compatibility** — Go and C# produce identical wire formats
+- **Cross-language binary compatibility** — Go, C#, and TypeScript produce identical wire formats
+- **Browser support** — TypeScript target uses native DataView API for zero-dependency serialization
 
 ## When to use
 
@@ -24,6 +27,7 @@ Typical setups:
 - **[Nakama](https://heroiclabs.com/nakama/) + Unity** — define all network messages in Go, generate C# structs for Unity. Both sides share the exact same wire format with no reflection or boxing.
 - **Custom Go game server + Unity** — roll your own server without pulling in a serialization framework. ArPack generates plain `Marshal`/`Unmarshal` methods with zero allocations on the hot path.
 - **Any Go service + .NET client** — works anywhere you control both ends and want a compact binary protocol without Protobuf's runtime overhead or code-gen complexity.
+- **Go backend + Browser/WebSocket** — generate TypeScript classes for browser-based clients. Uses native DataView API with zero dependencies.
 
 ArPack is a poor fit if you need schema evolution (adding/removing fields without redeploying both sides) — use Protobuf or FlatBuffers instead.
 
@@ -36,7 +40,11 @@ go install github.com/edmand46/arpack/cmd/arpack@latest
 ## Usage
 
 ```bash
-arpack -in messages.go -out-go ./gen -out-cs ../Unity/Assets/Scripts
+# Generate Go + C# + TypeScript
+arpack -in messages.go -out-go ./gen -out-cs ../Unity/Assets/Scripts -out-ts ./web/src/messages
+
+# Generate only TypeScript
+arpack -in messages.go -out-ts ./web/src/messages
 ```
 
 | Flag | Description |
@@ -44,11 +52,13 @@ arpack -in messages.go -out-go ./gen -out-cs ../Unity/Assets/Scripts
 | `-in` | Input Go file with struct definitions (required) |
 | `-out-go` | Output directory for generated Go code |
 | `-out-cs` | Output directory for generated C# code |
+| `-out-ts` | Output directory for generated TypeScript code |
 | `-cs-namespace` | C# namespace (default: `Arpack.Messages`) |
 
 **Output files:**
 - Go: `{name}_gen.go`
 - C#: `{Name}.gen.cs`
+- TypeScript: `{Name}.gen.ts`
 
 ## Schema Definition
 
@@ -134,6 +144,28 @@ public static unsafe int Deserialize(byte* buffer, out MoveMessage msg)
 ```
 
 Uses unsafe pointers for zero-copy serialization. Returns bytes written/consumed.
+
+### TypeScript
+
+```typescript
+export class MoveMessage {
+  position: Vector3 = new Vector3();
+  velocity: number[] = new Array<number>(3).fill(0);
+  waypoints: Vector3[] = [];
+  playerId: number = 0;
+  active: boolean = false;
+  visible: boolean = false;
+  ghost: boolean = false;
+  name: string = "";
+
+  serialize(view: DataView, offset: number): number
+  static deserialize(view: DataView, offset: number): [MoveMessage, number]
+}
+```
+
+Uses native DataView API for browser-compatible serialization with zero dependencies. Returns bytes written/consumed.
+
+**Note:** TypeScript field names are converted to camelCase (e.g., `PlayerID` → `playerId`).
 
 ## Wire Format
 

@@ -2,9 +2,9 @@ package e2e
 
 import (
 	"bytes"
+	"fmt"
 	"github.com/edmand46/arpack/generator"
 	"github.com/edmand46/arpack/parser"
-	"fmt"
 	"math"
 	"os"
 	"os/exec"
@@ -16,12 +16,8 @@ import (
 
 const samplePath = "../testdata/sample.go"
 
-// TestE2E_CrossLanguage гоняет сериализацию в обе стороны: Go → C# и C# → Go.
+// TestE2E_CrossLanguage гоняет сериализацию в обе стороны: Go → C# / C# → Go / Go → TS / TS → Go.
 func TestE2E_CrossLanguage(t *testing.T) {
-	if _, err := exec.LookPath("dotnet"); err != nil {
-		t.Skip("dotnet not found, skipping cross-language e2e test")
-	}
-
 	schema, err := parser.ParseSchemaFile(samplePath)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
@@ -32,13 +28,7 @@ func TestE2E_CrossLanguage(t *testing.T) {
 		t.Fatalf("GenerateGoSchema: %v", err)
 	}
 
-	csSrc, err := generator.GenerateCSharpSchema(schema, "Ragono.Messages")
-	if err != nil {
-		t.Fatalf("GenerateCSharpSchema: %v", err)
-	}
-
 	goDir := buildGoHarness(t, goSrc)
-	csDir := buildCSHarness(t, csSrc)
 
 	cases := []struct {
 		name    string
@@ -51,17 +41,52 @@ func TestE2E_CrossLanguage(t *testing.T) {
 		{"EnvelopeMessage", "EnvelopeMessage", 0},
 	}
 
-	for _, tc := range cases {
-		t.Run("Go_to_CS/"+tc.name, func(t *testing.T) {
-			hex := runHarness(t, goDir, "go", "ser", tc.typ, "")
-			out := runHarness(t, csDir, "cs", "deser", tc.typ, hex)
-			checkOutput(t, tc.typ, out, tc.epsilon)
-		})
-		t.Run("CS_to_Go/"+tc.name, func(t *testing.T) {
-			hex := runHarness(t, csDir, "cs", "ser", tc.typ, "")
-			out := runHarness(t, goDir, "go", "deser", tc.typ, hex)
-			checkOutput(t, tc.typ, out, tc.epsilon)
-		})
+	// C# tests (if dotnet is available)
+	if _, err := exec.LookPath("dotnet"); err == nil {
+		csSrc, err := generator.GenerateCSharpSchema(schema, "Ragono.Messages")
+		if err != nil {
+			t.Fatalf("GenerateCSharpSchema: %v", err)
+		}
+		csDir := buildCSHarness(t, csSrc)
+
+		for _, tc := range cases {
+			t.Run("Go_to_CS/"+tc.name, func(t *testing.T) {
+				hex := runHarness(t, goDir, "go", "ser", tc.typ, "")
+				out := runHarness(t, csDir, "cs", "deser", tc.typ, hex)
+				checkOutput(t, tc.typ, out, tc.epsilon)
+			})
+			t.Run("CS_to_Go/"+tc.name, func(t *testing.T) {
+				hex := runHarness(t, csDir, "cs", "ser", tc.typ, "")
+				out := runHarness(t, goDir, "go", "deser", tc.typ, hex)
+				checkOutput(t, tc.typ, out, tc.epsilon)
+			})
+		}
+	} else {
+		t.Log("dotnet not found, skipping C# cross-language e2e tests")
+	}
+
+	// TypeScript tests (if node and tsx are available)
+	if _, err := exec.LookPath("node"); err == nil {
+		tsSrc, err := generator.GenerateTypeScriptSchema(schema, "Arpack.Messages")
+		if err != nil {
+			t.Fatalf("GenerateTypeScriptSchema: %v", err)
+		}
+		tsDir := buildTSHarness(t, tsSrc)
+
+		for _, tc := range cases {
+			t.Run("Go_to_TS/"+tc.name, func(t *testing.T) {
+				hex := runHarness(t, goDir, "go", "ser", tc.typ, "")
+				out := runHarness(t, tsDir, "ts", "deser", tc.typ, hex)
+				checkOutput(t, tc.typ, out, tc.epsilon)
+			})
+			t.Run("TS_to_Go/"+tc.name, func(t *testing.T) {
+				hex := runHarness(t, tsDir, "ts", "ser", tc.typ, "")
+				out := runHarness(t, goDir, "go", "deser", tc.typ, hex)
+				checkOutput(t, tc.typ, out, tc.epsilon)
+			})
+		}
+	} else {
+		t.Log("node not found, skipping TypeScript cross-language e2e tests")
 	}
 }
 
@@ -100,23 +125,59 @@ func buildCSHarness(t *testing.T, generatedSrc []byte) string {
 	return dir
 }
 
+func buildTSHarness(t *testing.T, generatedSrc []byte) string {
+	t.Helper()
+	dir := t.TempDir()
+
+	// Create src directory
+	srcDir := filepath.Join(dir, "src")
+	if err := os.MkdirAll(srcDir, 0755); err != nil {
+		t.Fatalf("mkdir %s: %v", srcDir, err)
+	}
+
+	// Write generated messages
+	write(t, filepath.Join(srcDir, "messages.gen.ts"), generatedSrc)
+
+	// Write harness
+	write(t, filepath.Join(srcDir, "harness.ts"), []byte(tsHarnessSource))
+
+	// Write package.json
+	write(t, filepath.Join(dir, "package.json"), []byte(tsPackageSource))
+
+	// Write tsconfig.json
+	write(t, filepath.Join(dir, "tsconfig.json"), []byte(tsConfigSource))
+
+	// Install dependencies and build
+	mustRun(t, dir, "npm", "install")
+	mustRun(t, dir, "npx", "tsc")
+
+	return dir
+}
+
 // --- Harness runners ---
 
 func runHarness(t *testing.T, dir, lang, op, typ, hexInput string) string {
 	t.Helper()
 	var cmd *exec.Cmd
-	if lang == "go" {
+	switch lang {
+	case "go":
 		args := []string{op, typ}
 		if hexInput != "" {
 			args = append(args, hexInput)
 		}
 		cmd = exec.Command(filepath.Join(dir, "harness"), args...)
-	} else {
+	case "cs":
 		args := []string{op, typ}
 		if hexInput != "" {
 			args = append(args, hexInput)
 		}
 		cmd = exec.Command("dotnet", append([]string{filepath.Join(dir, "out", "E2EHarness.dll")}, args...)...)
+	case "ts":
+		args := []string{op, typ}
+		if hexInput != "" {
+			args = append(args, hexInput)
+		}
+		cmd = exec.Command("node", append([]string{filepath.Join(dir, "dist", "harness.js")}, args...)...)
 	}
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
@@ -519,3 +580,191 @@ var csProjSource = fmt.Sprintf(`<Project Sdk="Microsoft.NET.Sdk">
   </PropertyGroup>
 </Project>
 `)
+
+// --- TypeScript harness source ---
+
+const tsPackageSource = `{
+  "name": "arpack-e2e-harness",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "build": "tsc"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.0",
+    "@types/node": "^20.0.0"
+  }
+}
+`
+
+const tsConfigSource = `{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "DOM"],
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "outDir": "./dist",
+    "rootDir": "./src"
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist"]
+}
+`
+
+const tsHarnessSource = `import { readFileSync } from 'fs';
+import { argv } from 'process';
+
+// Import generated messages
+import { Vector3, MoveMessage, SpawnMessage, EnvelopeMessage, Opcode } from './messages.gen.js';
+
+// Hex encoding/decoding utilities
+function encodeHex(data: Uint8Array): string {
+  return Array.from(data)
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+function decodeHex(hex: string): Uint8Array {
+  const bytes = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < hex.length; i += 2) {
+    bytes[i / 2] = parseInt(hex.substr(i, 2), 16);
+  }
+  return bytes;
+}
+
+// Main harness
+function main() {
+  const args = argv.slice(2);
+  const op = args[0]; // 'ser' or 'deser'
+  const typ = args[1]; // message type
+  const hexInput = args[2]; // for deser
+
+  switch (` + "`${op}:${typ}`" + `) {
+    case 'ser:Vector3': {
+      const msg = new Vector3();
+      msg.x = 123.45;
+      msg.y = -200.0;
+      msg.z = 0.0;
+      const buf = new ArrayBuffer(64);
+      const view = new DataView(buf);
+      const n = msg.serialize(view, 0);
+      const bytes = new Uint8Array(buf, 0, n);
+      console.log(encodeHex(bytes));
+      break;
+    }
+
+    case 'deser:Vector3': {
+      const data = decodeHex(hexInput);
+      const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+      const [msg] = Vector3.deserialize(view, 0);
+      console.log(` + "`X=${msg.x.toPrecision(9)}`" + `);
+      console.log(` + "`Y=${msg.y.toPrecision(9)}`" + `);
+      console.log(` + "`Z=${msg.z.toPrecision(9)}`" + `);
+      break;
+    }
+
+    case 'ser:SpawnMessage': {
+      const msg = new SpawnMessage();
+      msg.entityID = 42n;
+      msg.position = new Vector3();
+      msg.position.x = 10.0;
+      msg.position.y = 20.0;
+      msg.position.z = 30.0;
+      msg.health = -100;
+      msg.tags = ['hero', 'player'];
+      msg.data = [1, 2, 3];
+      const buf = new ArrayBuffer(512);
+      const view = new DataView(buf);
+      const n = msg.serialize(view, 0);
+      const bytes = new Uint8Array(buf, 0, n);
+      console.log(encodeHex(bytes));
+      break;
+    }
+
+    case 'deser:SpawnMessage': {
+      const data = decodeHex(hexInput);
+      const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+      const [msg] = SpawnMessage.deserialize(view, 0);
+      console.log(` + "`EntityID=${msg.entityID.toString()}`" + `);
+      console.log(` + "`Position.X=${msg.position.x.toPrecision(9)}`" + `);
+      console.log(` + "`Position.Y=${msg.position.y.toPrecision(9)}`" + `);
+      console.log(` + "`Position.Z=${msg.position.z.toPrecision(9)}`" + `);
+      console.log(` + "`Health=${msg.health}`" + `);
+      for (let i = 0; i < msg.tags.length; i++) {
+        console.log(` + "`Tags[${i}]=${msg.tags[i]}`" + `);
+      }
+      for (let i = 0; i < msg.data.length; i++) {
+        console.log(` + "`Data[${i}]=${msg.data[i]}`" + `);
+      }
+      break;
+    }
+
+    case 'ser:MoveMessage': {
+      const msg = new MoveMessage();
+      msg.position = new Vector3();
+      msg.position.x = 50.0;
+      msg.position.y = -100.0;
+      msg.position.z = 0.0;
+      msg.velocity = [1.5, -2.5, 0.0];
+      msg.waypoints = [new Vector3()];
+      msg.waypoints[0].x = 10.0;
+      msg.waypoints[0].y = 20.0;
+      msg.waypoints[0].z = 0.0;
+      msg.playerID = 777;
+      msg.active = true;
+      msg.visible = false;
+      msg.ghost = true;
+      msg.name = 'TestPlayer';
+      const buf = new ArrayBuffer(512);
+      const view = new DataView(buf);
+      const n = msg.serialize(view, 0);
+      const bytes = new Uint8Array(buf, 0, n);
+      console.log(encodeHex(bytes));
+      break;
+    }
+
+    case 'deser:MoveMessage': {
+      const data = decodeHex(hexInput);
+      const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+      const [msg] = MoveMessage.deserialize(view, 0);
+      console.log(` + "`PlayerID=${msg.playerID}`" + `);
+      console.log(` + "`Active=${msg.active.toString().toLowerCase()}`" + `);
+      console.log(` + "`Visible=${msg.visible.toString().toLowerCase()}`" + `);
+      console.log(` + "`Ghost=${msg.ghost.toString().toLowerCase()}`" + `);
+      console.log(` + "`Name=${msg.name}`" + `);
+      break;
+    }
+
+    case 'ser:EnvelopeMessage': {
+      const msg = new EnvelopeMessage();
+      msg.code = 2; // Opcode.JoinRoom
+      msg.counter = 7;
+      const buf = new ArrayBuffer(64);
+      const view = new DataView(buf);
+      const n = msg.serialize(view, 0);
+      const bytes = new Uint8Array(buf, 0, n);
+      console.log(encodeHex(bytes));
+      break;
+    }
+
+    case 'deser:EnvelopeMessage': {
+      const data = decodeHex(hexInput);
+      const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+      const [msg] = EnvelopeMessage.deserialize(view, 0);
+      console.log(` + "`Code=${msg.code}`" + `);
+      console.log(` + "`Counter=${msg.counter}`" + `);
+      break;
+    }
+
+    default:
+      console.error(` + "`Unknown op:type ${op}:${typ}`" + `);
+      process.exit(1);
+  }
+}
+
+main();
+`

@@ -20,4 +20,4 @@ formatters:
 linters-settings:
   goimports:
     local-prefixes:
-      - gorena/server
+      - github.com/edmand46/arpack
