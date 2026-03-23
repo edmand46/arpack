@@ -29,8 +29,6 @@ Typical setups:
 - **Any Go service + .NET client** — works anywhere you control both ends and want a compact binary protocol without Protobuf's runtime overhead or code-gen complexity.
 - **Go backend + Browser/WebSocket** — generate TypeScript classes for browser-based clients. Uses native DataView API with zero dependencies.
 
-ArPack is a poor fit if you need schema evolution (adding/removing fields without redeploying both sides) — use Protobuf or FlatBuffers instead.
-
 ## Installation
 
 ```bash
