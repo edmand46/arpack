@@ -143,10 +143,48 @@ Uses unsafe pointers for zero-copy serialization. Returns bytes written/consumed
 - Booleans packed as bitfields (LSB first, up to 8 per byte)
 - Quantized floats stored as `uint8` or `uint16`
 
+## Benchmarks Go Results (M3 Max)
+
+```
+BenchmarkArPack_Marshal-16        382568360    9.5 ns/op    5065 MB/s    0 B/op    0 allocs/op
+BenchmarkArPack_Unmarshal-16       98895892   34.6 ns/op    1388 MB/s   40 B/op    2 allocs/op
+BenchmarkProto_Marshal-16          21989466  163.6 ns/op     416 MB/s    0 B/op    0 allocs/op
+BenchmarkProto_Unmarshal-16        13950333  256.9 ns/op     265 MB/s  248 B/op    7 allocs/op
+BenchmarkFlatBuffers_Marshal-16    16297458  221.4 ns/op     687 MB/s    0 B/op    0 allocs/op
+BenchmarkFlatBuffers_Unmarshal-16  56095480   64.8 ns/op    2345 MB/s   24 B/op    1 allocs/op
+```
+
+| Format | Size |
+|---|---|
+| ArPack | 48 bytes |
+| Protobuf | 68 bytes |
+| FlatBuffers | 152 bytes |
+
+```bash
+go test ./benchmarks/... -bench=. -benchmem
+```
+
+### Benchmarks Unity Mono (M3 Max)
+
+```
+ArPack Serialize:           96.7 ns/op |    0 B/op
+ArPack Deserialize:        205.4 ns/op |    0 B/op
+Proto Serialize (alloc):   930.2 ns/op |    0 B/op
+Proto Deserialize (alloc): 1621.2 ns/op |   29 B/op
+Proto Serialize (reuse):   652.7 ns/op |    0 B/op
+```
+
+ArPack serialize is ~10× faster than Protobuf in Unity. Protobuf deserialize allocates on every call — a GC pressure source in hot game loops. ArPack deserialize is zero-alloc.
+
+```bash
+make gen-unity
+# then attach BenchmarkRunner to any GameObject in SampleScene and press Play
+```
+
 ## Running Tests
 
 ```bash
-# Unit tests 
+# Unit tests
 go test ./parser/... ./generator/...
 
 # End-to-end cross-language tests

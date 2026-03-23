@@ -3,6 +3,12 @@
 .codex
 .DS_Store
 
+Library
+Logs
+Packages
+Temp
+UserSettings
+
 .idea
 bin
 obj

@@ -1,0 +1,20 @@
+syntax = "proto3";
+package benchproto;
+option go_package = "github.com/edmand46/arpack/benchmarks/proto";
+
+message Vector3 {
+  float x = 1;
+  float y = 2;
+  float z = 3;
+}
+
+message MoveMessage {
+  Vector3 position = 1;
+  repeated float velocity = 2;
+  repeated Vector3 waypoints = 3;
+  uint32 player_id = 4;
+  bool active = 5;
+  bool visible = 6;
+  bool ghost = 7;
+  string name = 8;
+}
