@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        go-version: ['1.21', '1.22', '1.23']
+        go-version: ['1.25', '1.26']
 
     steps:
     - uses: actions/checkout@v4
@@ -49,7 +49,7 @@ jobs:
         go-version: '1.23'
 
     - name: golangci-lint
-      uses: golangci/golangci-lint-action@v6
+      uses: golangci/golangci-lint-action@v7
       with:
         version: latest
         args: --timeout=5m
@@ -70,7 +70,7 @@ jobs:
     - name: Test code generation
       run: |
         go run ./cmd/arpack -in testdata/sample.go -out-go /tmp/gen-go -out-ts /tmp/gen-ts
-        test -f /tmp/gen-go/Sample_gen.go
+        test -f /tmp/gen-go/sample_gen.go
         test -f /tmp/gen-ts/Sample.gen.ts
 
   e2e:
