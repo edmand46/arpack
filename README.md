@@ -6,8 +6,6 @@
 
 Binary serialization code generator for Go and C#. Define messages once as Go structs — get zero-allocation `Marshal`/`Unmarshal` for Go and `unsafe` pointer-based `Serialize`/`Deserialize` for C#.
 
-Built for game networking where every byte and allocation matters.
-
 ## Features
 
 - **Single source of truth** — define messages in Go, generate both Go and C# code
@@ -35,8 +33,6 @@ arpack -in messages.go -out-go ./gen -out-cs ../Unity/Assets/Scripts
 | `-out-go` | Output directory for generated Go code |
 | `-out-cs` | Output directory for generated C# code |
 | `-cs-namespace` | C# namespace (default: `Arpack.Messages`) |
-
-At least one of `-out-go` or `-out-cs` is required.
 
 **Output files:**
 - Go: `{name}_gen.go`
@@ -138,9 +134,9 @@ Uses unsafe pointers for zero-copy serialization. Returns bytes written/consumed
 ## Running Tests
 
 ```bash
-# Unit tests (parser + generator)
+# Unit tests 
 go test ./parser/... ./generator/...
 
-# End-to-end cross-language tests (requires dotnet SDK)
+# End-to-end cross-language tests
 go test ./e2e/...
 ```
