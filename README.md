@@ -15,6 +15,18 @@ Binary serialization code generator for Go and C#. Define messages once as Go st
 - **Nested types, fixed arrays, slices** — full support for complex message structures
 - **Cross-language binary compatibility** — Go and C# produce identical wire formats
 
+## When to use
+
+ArPack is designed for real-time multiplayer games and other latency-sensitive systems where a Go backend talks to a C# client over a binary protocol.
+
+Typical setups:
+
+- **[Nakama](https://heroiclabs.com/nakama/) + Unity** — define all network messages in Go, generate C# structs for Unity. Both sides share the exact same wire format with no reflection or boxing.
+- **Custom Go game server + Unity** — roll your own server without pulling in a serialization framework. ArPack generates plain `Marshal`/`Unmarshal` methods with zero allocations on the hot path.
+- **Any Go service + .NET client** — works anywhere you control both ends and want a compact binary protocol without Protobuf's runtime overhead or code-gen complexity.
+
+ArPack is a poor fit if you need schema evolution (adding/removing fields without redeploying both sides) — use Protobuf or FlatBuffers instead.
+
 ## Installation
 
 ```bash
