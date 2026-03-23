@@ -16,7 +16,7 @@ import (
 
 const samplePath = "../testdata/sample.go"
 
-// TestE2E_CrossLanguage гоняет сериализацию в обе стороны: Go → C# / C# → Go / Go → TS / TS → Go.
+// TestE2E_CrossLanguage
 func TestE2E_CrossLanguage(t *testing.T) {
 	schema, err := parser.ParseSchemaFile(samplePath)
 	if err != nil {
@@ -41,7 +41,6 @@ func TestE2E_CrossLanguage(t *testing.T) {
 		{"EnvelopeMessage", "EnvelopeMessage", 0},
 	}
 
-	// C# tests (if dotnet is available)
 	if _, err := exec.LookPath("dotnet"); err == nil {
 		csSrc, err := generator.GenerateCSharpSchema(schema, "Ragono.Messages")
 		if err != nil {
@@ -65,7 +64,6 @@ func TestE2E_CrossLanguage(t *testing.T) {
 		t.Log("dotnet not found, skipping C# cross-language e2e tests")
 	}
 
-	// TypeScript tests (if node and tsx are available)
 	if _, err := exec.LookPath("node"); err == nil {
 		tsSrc, err := generator.GenerateTypeScriptSchema(schema, "Arpack.Messages")
 		if err != nil {
@@ -90,20 +88,16 @@ func TestE2E_CrossLanguage(t *testing.T) {
 	}
 }
 
-// --- Build helpers ---
-
 func buildGoHarness(t *testing.T, generatedSrc []byte) string {
 	t.Helper()
 	dir := t.TempDir()
 
-	// Читаем sample.go и меняем package на main
 	sampleSrc, err := os.ReadFile(samplePath)
 	if err != nil {
 		t.Fatalf("read sample: %v", err)
 	}
 	sampleSrc = bytes.Replace(sampleSrc, []byte("package messages"), []byte("package main"), 1)
 
-	// Generated код уже имеет package main (мы передали "main" в GenerateGo)
 	write(t, filepath.Join(dir, "messages.go"), sampleSrc)
 	write(t, filepath.Join(dir, "messages_arpack.go"), generatedSrc)
 	write(t, filepath.Join(dir, "main.go"), []byte(goHarnessSource))
@@ -129,32 +123,21 @@ func buildTSHarness(t *testing.T, generatedSrc []byte) string {
 	t.Helper()
 	dir := t.TempDir()
 
-	// Create src directory
 	srcDir := filepath.Join(dir, "src")
 	if err := os.MkdirAll(srcDir, 0755); err != nil {
 		t.Fatalf("mkdir %s: %v", srcDir, err)
 	}
 
-	// Write generated messages
 	write(t, filepath.Join(srcDir, "messages.gen.ts"), generatedSrc)
-
-	// Write harness
 	write(t, filepath.Join(srcDir, "harness.ts"), []byte(tsHarnessSource))
-
-	// Write package.json
 	write(t, filepath.Join(dir, "package.json"), []byte(tsPackageSource))
-
-	// Write tsconfig.json
 	write(t, filepath.Join(dir, "tsconfig.json"), []byte(tsConfigSource))
 
-	// Install dependencies and build
 	mustRun(t, dir, "npm", "install")
 	mustRun(t, dir, "npx", "tsc")
 
 	return dir
 }
-
-// --- Harness runners ---
 
 func runHarness(t *testing.T, dir, lang, op, typ, hexInput string) string {
 	t.Helper()
@@ -187,9 +170,6 @@ func runHarness(t *testing.T, dir, lang, op, typ, hexInput string) string {
 	return strings.TrimSpace(string(out))
 }
 
-// --- Output verification ---
-
-// checkOutput парсит key=value вывод и сравнивает с ожидаемыми значениями.
 func checkOutput(t *testing.T, typ, output string, epsilon float64) {
 	t.Helper()
 	t.Logf("output for %s:\n%s", typ, output)
@@ -283,8 +263,6 @@ func assertStr(t *testing.T, kv map[string]string, key, want string) {
 	}
 }
 
-// --- Utilities ---
-
 func write(t *testing.T, path string, data []byte) {
 	t.Helper()
 	if err := os.WriteFile(path, data, 0644); err != nil {
@@ -300,8 +278,6 @@ func mustRun(t *testing.T, dir string, name string, args ...string) {
 		t.Fatalf("%s %v failed: %v\n%s", name, args, err, out)
 	}
 }
-
-// --- Go harness source ---
 
 const goHarnessSource = `package main
 
@@ -397,8 +373,6 @@ func main() {
 	}
 }
 `
-
-// --- C# harness source ---
 
 const csHarnessSource = `using System;
 using System.Globalization;
@@ -580,8 +554,6 @@ var csProjSource = `<Project Sdk="Microsoft.NET.Sdk">
   </PropertyGroup>
 </Project>
 `
-
-// --- TypeScript harness source ---
 
 const tsPackageSource = `{
   "name": "arpack-e2e-harness",
