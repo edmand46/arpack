@@ -91,7 +91,7 @@ func TestMessageSize(t *testing.T) {
 		t.Fatalf("proto.Unmarshal: %v", err)
 	}
 	if pbOut.PlayerId != 999 || pbOut.Name != "PlayerOne" {
-		t.Errorf("Proto round-trip mismatch: %+v", pbOut)
+		t.Errorf("Proto round-trip mismatch: PlayerId=%d Name=%s", pbOut.PlayerId, pbOut.Name)
 	}
 
 	var fbOut benchfbs.MoveMsg

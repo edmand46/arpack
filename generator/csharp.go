@@ -1,9 +1,10 @@
 package generator
 
 import (
-	"github.com/edmand46/arpack/parser"
 	"fmt"
 	"strings"
+
+	"github.com/edmand46/arpack/parser"
 )
 
 func GenerateCSharp(messages []parser.Message, namespace string) ([]byte, error) {
@@ -455,7 +456,7 @@ func csharpEnumValueName(enumName, valueName string) string {
 	}
 
 	first := suffix[0]
-	if !((first >= 'A' && first <= 'Z') || (first >= '0' && first <= '9') || first == '_') {
+	if (first < 'A' || first > 'Z') && (first < '0' || first > '9') && first != '_' {
 		return valueName
 	}
 

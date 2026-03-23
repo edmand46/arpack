@@ -2,9 +2,6 @@ package e2e
 
 import (
 	"bytes"
-	"fmt"
-	"github.com/edmand46/arpack/generator"
-	"github.com/edmand46/arpack/parser"
 	"math"
 	"os"
 	"os/exec"
@@ -12,6 +9,9 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/edmand46/arpack/generator"
+	"github.com/edmand46/arpack/parser"
 )
 
 const samplePath = "../testdata/sample.go"
@@ -570,7 +570,7 @@ unsafe class Program
 }
 `
 
-var csProjSource = fmt.Sprintf(`<Project Sdk="Microsoft.NET.Sdk">
+var csProjSource = `<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net9.0</TargetFramework>
@@ -579,7 +579,7 @@ var csProjSource = fmt.Sprintf(`<Project Sdk="Microsoft.NET.Sdk">
     <ImplicitUsings>disable</ImplicitUsings>
   </PropertyGroup>
 </Project>
-`)
+`
 
 // --- TypeScript harness source ---
 

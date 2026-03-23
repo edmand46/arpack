@@ -127,9 +127,7 @@ func parseASTFile(fset *token.FileSet, f *ast.File) (Schema, error) {
 				schema.Messages = append(schema.Messages, msg)
 			}
 		case token.CONST:
-			if err := parseConstDecls(genDecl, info, enumIndex, &schema); err != nil {
-				return Schema{}, err
-			}
+			parseConstDecls(genDecl, info, enumIndex, &schema)
 		}
 	}
 
@@ -152,7 +150,7 @@ func typeCheckFile(fset *token.FileSet, f *ast.File) (*types.Info, error) {
 	return info, nil
 }
 
-func parseConstDecls(genDecl *ast.GenDecl, info *types.Info, enumIndex map[string]int, schema *Schema) error {
+func parseConstDecls(genDecl *ast.GenDecl, info *types.Info, enumIndex map[string]int, schema *Schema) {
 	for _, spec := range genDecl.Specs {
 		valueSpec, ok := spec.(*ast.ValueSpec)
 		if !ok {
@@ -181,8 +179,6 @@ func parseConstDecls(genDecl *ast.GenDecl, info *types.Info, enumIndex map[strin
 			})
 		}
 	}
-
-	return nil
 }
 
 func parseStruct(

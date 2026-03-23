@@ -86,7 +86,7 @@ func writeTSMessage(b *strings.Builder, msg parser.Message, enumNames map[string
 	// Deserialize method
 	fmt.Fprintf(b, "  static deserialize(view: DataView, offset: number): [%s, number] {\n", msg.Name)
 	b.WriteString("    let pos = offset;\n")
-	b.WriteString(fmt.Sprintf("    const msg = new %s();\n", msg.Name))
+	fmt.Fprintf(b, "    const msg = new %s();\n", msg.Name)
 	for i, seg := range segs {
 		if seg.single != nil {
 			if err := writeTSDeserializeField(b, "msg", *seg.single, "    ", enumNames); err != nil {
@@ -110,13 +110,13 @@ func writeTSBoolGroupSerialize(b *strings.Builder, recv string, bools []parser.F
 		fmt.Fprintf(b, "%sif (%s.%s) %s |= 1 << %d;\n", indent, recv, toCamelCase(f.Name), varName, bit)
 	}
 	fmt.Fprintf(b, "%sview.setUint8(pos, %s);\n", indent, varName)
-	b.WriteString(fmt.Sprintf("%spos += 1;\n", indent))
+	fmt.Fprintf(b, "%spos += 1;\n", indent)
 }
 
 func writeTSBoolGroupDeserialize(b *strings.Builder, recv string, bools []parser.Field, groupIdx int, indent string) {
 	varName := fmt.Sprintf("_boolByte%d", groupIdx)
 	fmt.Fprintf(b, "%sconst %s = view.getUint8(pos);\n", indent, varName)
-	b.WriteString(fmt.Sprintf("%spos += 1;\n", indent))
+	fmt.Fprintf(b, "%spos += 1;\n", indent)
 	for bit, f := range bools {
 		fmt.Fprintf(b, "%s%s.%s = (%s & (1 << %d)) !== 0;\n", indent, recv, toCamelCase(f.Name), varName, bit)
 	}
@@ -149,7 +149,7 @@ func writeTSSerializeField(b *strings.Builder, recv string, f parser.Field, inde
 		fmt.Fprintf(b, "%s}\n", indent)
 	case parser.KindSlice:
 		fmt.Fprintf(b, "%sview.setUint16(pos, %s.length, true);\n", indent, access)
-		b.WriteString(fmt.Sprintf("%spos += 2;\n", indent))
+		fmt.Fprintf(b, "%spos += 2;\n", indent)
 		iVar := "_i" + f.Name
 		fmt.Fprintf(b, "%sfor (const %s of %s) {\n", indent, iVar, access)
 		elemField := parser.Field{
@@ -189,42 +189,42 @@ func writeTSSerializePrimitiveElement(b *strings.Builder, access string, f parse
 	switch f.Primitive {
 	case parser.KindFloat32:
 		fmt.Fprintf(b, "%sview.setFloat32(pos, %s, true);\n", indent, valueExpr)
-		b.WriteString(fmt.Sprintf("%spos += 4;\n", indent))
+		fmt.Fprintf(b, "%spos += 4;\n", indent)
 	case parser.KindFloat64:
 		fmt.Fprintf(b, "%sview.setFloat64(pos, %s, true);\n", indent, valueExpr)
-		b.WriteString(fmt.Sprintf("%spos += 8;\n", indent))
+		fmt.Fprintf(b, "%spos += 8;\n", indent)
 	case parser.KindInt8:
 		fmt.Fprintf(b, "%sview.setInt8(pos, %s);\n", indent, valueExpr)
-		b.WriteString(fmt.Sprintf("%spos += 1;\n", indent))
+		fmt.Fprintf(b, "%spos += 1;\n", indent)
 	case parser.KindUint8:
 		fmt.Fprintf(b, "%sview.setUint8(pos, %s);\n", indent, valueExpr)
-		b.WriteString(fmt.Sprintf("%spos += 1;\n", indent))
+		fmt.Fprintf(b, "%spos += 1;\n", indent)
 	case parser.KindBool:
 		fmt.Fprintf(b, "%sview.setUint8(pos, %s ? 1 : 0);\n", indent, valueExpr)
-		b.WriteString(fmt.Sprintf("%spos += 1;\n", indent))
+		fmt.Fprintf(b, "%spos += 1;\n", indent)
 	case parser.KindInt16:
 		fmt.Fprintf(b, "%sview.setInt16(pos, %s, true);\n", indent, valueExpr)
-		b.WriteString(fmt.Sprintf("%spos += 2;\n", indent))
+		fmt.Fprintf(b, "%spos += 2;\n", indent)
 	case parser.KindUint16:
 		fmt.Fprintf(b, "%sview.setUint16(pos, %s, true);\n", indent, valueExpr)
-		b.WriteString(fmt.Sprintf("%spos += 2;\n", indent))
+		fmt.Fprintf(b, "%spos += 2;\n", indent)
 	case parser.KindInt32:
 		fmt.Fprintf(b, "%sview.setInt32(pos, %s, true);\n", indent, valueExpr)
-		b.WriteString(fmt.Sprintf("%spos += 4;\n", indent))
+		fmt.Fprintf(b, "%spos += 4;\n", indent)
 	case parser.KindUint32:
 		fmt.Fprintf(b, "%sview.setUint32(pos, %s, true);\n", indent, valueExpr)
-		b.WriteString(fmt.Sprintf("%spos += 4;\n", indent))
+		fmt.Fprintf(b, "%spos += 4;\n", indent)
 	case parser.KindInt64:
 		fmt.Fprintf(b, "%sview.setBigInt64(pos, %s, true);\n", indent, valueExpr)
-		b.WriteString(fmt.Sprintf("%spos += 8;\n", indent))
+		fmt.Fprintf(b, "%spos += 8;\n", indent)
 	case parser.KindUint64:
 		fmt.Fprintf(b, "%sview.setBigUint64(pos, %s, true);\n", indent, valueExpr)
-		b.WriteString(fmt.Sprintf("%spos += 8;\n", indent))
+		fmt.Fprintf(b, "%spos += 8;\n", indent)
 	case parser.KindString:
 		lenVar := "_slen" + sanitizeVarName(access)
 		fmt.Fprintf(b, "%sconst %s = new TextEncoder().encode(%s);\n", indent, lenVar, valueExpr)
 		fmt.Fprintf(b, "%sview.setUint16(pos, %s.length, true);\n", indent, lenVar)
-		b.WriteString(fmt.Sprintf("%spos += 2;\n", indent))
+		fmt.Fprintf(b, "%spos += 2;\n", indent)
 		fmt.Fprintf(b, "%snew Uint8Array(view.buffer, pos, %s.length).set(%s);\n", indent, lenVar, lenVar)
 		fmt.Fprintf(b, "%spos += %s.length;\n", indent, lenVar)
 	}
@@ -240,42 +240,42 @@ func writeTSSerializePrimitive(b *strings.Builder, access string, f parser.Field
 	switch f.Primitive {
 	case parser.KindFloat32:
 		fmt.Fprintf(b, "%sview.setFloat32(pos, %s, true);\n", indent, valueExpr)
-		b.WriteString(fmt.Sprintf("%spos += 4;\n", indent))
+		fmt.Fprintf(b, "%spos += 4;\n", indent)
 	case parser.KindFloat64:
 		fmt.Fprintf(b, "%sview.setFloat64(pos, %s, true);\n", indent, valueExpr)
-		b.WriteString(fmt.Sprintf("%spos += 8;\n", indent))
+		fmt.Fprintf(b, "%spos += 8;\n", indent)
 	case parser.KindInt8:
 		fmt.Fprintf(b, "%sview.setInt8(pos, %s);\n", indent, valueExpr)
-		b.WriteString(fmt.Sprintf("%spos += 1;\n", indent))
+		fmt.Fprintf(b, "%spos += 1;\n", indent)
 	case parser.KindUint8:
 		fmt.Fprintf(b, "%sview.setUint8(pos, %s);\n", indent, valueExpr)
-		b.WriteString(fmt.Sprintf("%spos += 1;\n", indent))
+		fmt.Fprintf(b, "%spos += 1;\n", indent)
 	case parser.KindBool:
 		fmt.Fprintf(b, "%sview.setUint8(pos, %s ? 1 : 0);\n", indent, valueExpr)
-		b.WriteString(fmt.Sprintf("%spos += 1;\n", indent))
+		fmt.Fprintf(b, "%spos += 1;\n", indent)
 	case parser.KindInt16:
 		fmt.Fprintf(b, "%sview.setInt16(pos, %s, true);\n", indent, valueExpr)
-		b.WriteString(fmt.Sprintf("%spos += 2;\n", indent))
+		fmt.Fprintf(b, "%spos += 2;\n", indent)
 	case parser.KindUint16:
 		fmt.Fprintf(b, "%sview.setUint16(pos, %s, true);\n", indent, valueExpr)
-		b.WriteString(fmt.Sprintf("%spos += 2;\n", indent))
+		fmt.Fprintf(b, "%spos += 2;\n", indent)
 	case parser.KindInt32:
 		fmt.Fprintf(b, "%sview.setInt32(pos, %s, true);\n", indent, valueExpr)
-		b.WriteString(fmt.Sprintf("%spos += 4;\n", indent))
+		fmt.Fprintf(b, "%spos += 4;\n", indent)
 	case parser.KindUint32:
 		fmt.Fprintf(b, "%sview.setUint32(pos, %s, true);\n", indent, valueExpr)
-		b.WriteString(fmt.Sprintf("%spos += 4;\n", indent))
+		fmt.Fprintf(b, "%spos += 4;\n", indent)
 	case parser.KindInt64:
 		fmt.Fprintf(b, "%sview.setBigInt64(pos, %s, true);\n", indent, valueExpr)
-		b.WriteString(fmt.Sprintf("%spos += 8;\n", indent))
+		fmt.Fprintf(b, "%spos += 8;\n", indent)
 	case parser.KindUint64:
 		fmt.Fprintf(b, "%sview.setBigUint64(pos, %s, true);\n", indent, valueExpr)
-		b.WriteString(fmt.Sprintf("%spos += 8;\n", indent))
+		fmt.Fprintf(b, "%spos += 8;\n", indent)
 	case parser.KindString:
 		lenVar := "_slen" + sanitizeVarName(access)
 		fmt.Fprintf(b, "%sconst %s = new TextEncoder().encode(%s);\n", indent, lenVar, valueExpr)
 		fmt.Fprintf(b, "%sview.setUint16(pos, %s.length, true);\n", indent, lenVar)
-		b.WriteString(fmt.Sprintf("%spos += 2;\n", indent))
+		fmt.Fprintf(b, "%spos += 2;\n", indent)
 		fmt.Fprintf(b, "%snew Uint8Array(view.buffer, pos, %s.length).set(%s);\n", indent, lenVar, lenVar)
 		fmt.Fprintf(b, "%spos += %s.length;\n", indent, lenVar)
 	}
@@ -290,12 +290,12 @@ func writeTSSerializeQuant(b *strings.Builder, access string, f parser.Field, in
 		fmt.Fprintf(b, "%sconst %s = Math.round((%s - (%g)) / (%g - (%g)) * %g);\n",
 			indent, varName, access, q.Min, q.Max, q.Min, maxUint)
 		fmt.Fprintf(b, "%sview.setUint8(pos, %s);\n", indent, varName)
-		b.WriteString(fmt.Sprintf("%spos += 1;\n", indent))
+		fmt.Fprintf(b, "%spos += 1;\n", indent)
 	} else {
 		fmt.Fprintf(b, "%sconst %s = Math.round((%s - (%g)) / (%g - (%g)) * %g);\n",
 			indent, varName, access, q.Min, q.Max, q.Min, maxUint)
 		fmt.Fprintf(b, "%sview.setUint16(pos, %s, true);\n", indent, varName)
-		b.WriteString(fmt.Sprintf("%spos += 2;\n", indent))
+		fmt.Fprintf(b, "%spos += 2;\n", indent)
 	}
 	return nil
 }
@@ -308,12 +308,12 @@ func writeTSSerializeQuantElement(b *strings.Builder, access string, f parser.Fi
 		fmt.Fprintf(b, "%sconst %s = Math.round((%s - (%g)) / (%g - (%g)) * %g);\n",
 			indent, varName, access, q.Min, q.Max, q.Min, maxUint)
 		fmt.Fprintf(b, "%sview.setUint8(pos, %s);\n", indent, varName)
-		b.WriteString(fmt.Sprintf("%spos += 1;\n", indent))
+		fmt.Fprintf(b, "%spos += 1;\n", indent)
 	} else {
 		fmt.Fprintf(b, "%sconst %s = Math.round((%s - (%g)) / (%g - (%g)) * %g);\n",
 			indent, varName, access, q.Min, q.Max, q.Min, maxUint)
 		fmt.Fprintf(b, "%sview.setUint16(pos, %s, true);\n", indent, varName)
-		b.WriteString(fmt.Sprintf("%spos += 2;\n", indent))
+		fmt.Fprintf(b, "%spos += 2;\n", indent)
 	}
 	return nil
 }
@@ -349,7 +349,7 @@ func writeTSDeserializeField(b *strings.Builder, recv string, f parser.Field, in
 	case parser.KindSlice:
 		lenVar := "_len" + f.Name
 		fmt.Fprintf(b, "%sconst %s = view.getUint16(pos, true);\n", indent, lenVar)
-		b.WriteString(fmt.Sprintf("%spos += 2;\n", indent))
+		fmt.Fprintf(b, "%spos += 2;\n", indent)
 		fmt.Fprintf(b, "%s%s = new Array(%s);\n", indent, access, lenVar)
 		iVar := "_i" + f.Name
 		fmt.Fprintf(b, "%sfor (let %s = 0; %s < %s; %s++) {\n", indent, iVar, iVar, lenVar, iVar)
@@ -391,53 +391,53 @@ func writeTSDeserializePrimitiveElement(b *strings.Builder, access string, f par
 
 	switch f.Primitive {
 	case parser.KindFloat32:
-		expr := fmt.Sprintf("view.getFloat32(pos, true)")
+		expr := "view.getFloat32(pos, true)"
 		fmt.Fprintf(b, "%s%s = %s;\n", indent, access, tsDeserializeValueExpr(expr, f, enumNames))
-		b.WriteString(fmt.Sprintf("%spos += 4;\n", indent))
+		fmt.Fprintf(b, "%spos += 4;\n", indent)
 	case parser.KindFloat64:
-		expr := fmt.Sprintf("view.getFloat64(pos, true)")
+		expr := "view.getFloat64(pos, true)"
 		fmt.Fprintf(b, "%s%s = %s;\n", indent, access, tsDeserializeValueExpr(expr, f, enumNames))
-		b.WriteString(fmt.Sprintf("%spos += 8;\n", indent))
+		fmt.Fprintf(b, "%spos += 8;\n", indent)
 	case parser.KindInt8:
-		expr := fmt.Sprintf("view.getInt8(pos)")
+		expr := "view.getInt8(pos)"
 		fmt.Fprintf(b, "%s%s = %s;\n", indent, access, tsDeserializeValueExpr(expr, f, enumNames))
-		b.WriteString(fmt.Sprintf("%spos += 1;\n", indent))
+		fmt.Fprintf(b, "%spos += 1;\n", indent)
 	case parser.KindUint8:
-		expr := fmt.Sprintf("view.getUint8(pos)")
+		expr := "view.getUint8(pos)"
 		fmt.Fprintf(b, "%s%s = %s;\n", indent, access, tsDeserializeValueExpr(expr, f, enumNames))
-		b.WriteString(fmt.Sprintf("%spos += 1;\n", indent))
+		fmt.Fprintf(b, "%spos += 1;\n", indent)
 	case parser.KindBool:
-		expr := fmt.Sprintf("view.getUint8(pos) !== 0")
+		expr := "view.getUint8(pos) !== 0"
 		fmt.Fprintf(b, "%s%s = %s;\n", indent, access, tsDeserializeValueExpr(expr, f, enumNames))
-		b.WriteString(fmt.Sprintf("%spos += 1;\n", indent))
+		fmt.Fprintf(b, "%spos += 1;\n", indent)
 	case parser.KindInt16:
-		expr := fmt.Sprintf("view.getInt16(pos, true)")
+		expr := "view.getInt16(pos, true)"
 		fmt.Fprintf(b, "%s%s = %s;\n", indent, access, tsDeserializeValueExpr(expr, f, enumNames))
-		b.WriteString(fmt.Sprintf("%spos += 2;\n", indent))
+		fmt.Fprintf(b, "%spos += 2;\n", indent)
 	case parser.KindUint16:
-		expr := fmt.Sprintf("view.getUint16(pos, true)")
+		expr := "view.getUint16(pos, true)"
 		fmt.Fprintf(b, "%s%s = %s;\n", indent, access, tsDeserializeValueExpr(expr, f, enumNames))
-		b.WriteString(fmt.Sprintf("%spos += 2;\n", indent))
+		fmt.Fprintf(b, "%spos += 2;\n", indent)
 	case parser.KindInt32:
-		expr := fmt.Sprintf("view.getInt32(pos, true)")
+		expr := "view.getInt32(pos, true)"
 		fmt.Fprintf(b, "%s%s = %s;\n", indent, access, tsDeserializeValueExpr(expr, f, enumNames))
-		b.WriteString(fmt.Sprintf("%spos += 4;\n", indent))
+		fmt.Fprintf(b, "%spos += 4;\n", indent)
 	case parser.KindUint32:
-		expr := fmt.Sprintf("view.getUint32(pos, true)")
+		expr := "view.getUint32(pos, true)"
 		fmt.Fprintf(b, "%s%s = %s;\n", indent, access, tsDeserializeValueExpr(expr, f, enumNames))
-		b.WriteString(fmt.Sprintf("%spos += 4;\n", indent))
+		fmt.Fprintf(b, "%spos += 4;\n", indent)
 	case parser.KindInt64:
-		expr := fmt.Sprintf("view.getBigInt64(pos, true)")
+		expr := "view.getBigInt64(pos, true)"
 		fmt.Fprintf(b, "%s%s = %s;\n", indent, access, tsDeserializeValueExpr(expr, f, enumNames))
-		b.WriteString(fmt.Sprintf("%spos += 8;\n", indent))
+		fmt.Fprintf(b, "%spos += 8;\n", indent)
 	case parser.KindUint64:
-		expr := fmt.Sprintf("view.getBigUint64(pos, true)")
+		expr := "view.getBigUint64(pos, true)"
 		fmt.Fprintf(b, "%s%s = %s;\n", indent, access, tsDeserializeValueExpr(expr, f, enumNames))
-		b.WriteString(fmt.Sprintf("%spos += 8;\n", indent))
+		fmt.Fprintf(b, "%spos += 8;\n", indent)
 	case parser.KindString:
 		lenVar := "_slen" + sanitizeVarName(access)
 		fmt.Fprintf(b, "%sconst %s = view.getUint16(pos, true);\n", indent, lenVar)
-		b.WriteString(fmt.Sprintf("%spos += 2;\n", indent))
+		fmt.Fprintf(b, "%spos += 2;\n", indent)
 		expr := fmt.Sprintf("new TextDecoder().decode(new Uint8Array(view.buffer, pos, %s))", lenVar)
 		fmt.Fprintf(b, "%s%s = %s;\n", indent, access, tsDeserializeValueExpr(expr, f, enumNames))
 		fmt.Fprintf(b, "%spos += %s;\n", indent, lenVar)
@@ -452,53 +452,53 @@ func writeTSDeserializePrimitive(b *strings.Builder, access string, f parser.Fie
 
 	switch f.Primitive {
 	case parser.KindFloat32:
-		expr := fmt.Sprintf("view.getFloat32(pos, true)")
+		expr := "view.getFloat32(pos, true)"
 		fmt.Fprintf(b, "%s%s = %s;\n", indent, access, tsDeserializeValueExpr(expr, f, enumNames))
-		b.WriteString(fmt.Sprintf("%spos += 4;\n", indent))
+		fmt.Fprintf(b, "%spos += 4;\n", indent)
 	case parser.KindFloat64:
-		expr := fmt.Sprintf("view.getFloat64(pos, true)")
+		expr := "view.getFloat64(pos, true)"
 		fmt.Fprintf(b, "%s%s = %s;\n", indent, access, tsDeserializeValueExpr(expr, f, enumNames))
-		b.WriteString(fmt.Sprintf("%spos += 8;\n", indent))
+		fmt.Fprintf(b, "%spos += 8;\n", indent)
 	case parser.KindInt8:
-		expr := fmt.Sprintf("view.getInt8(pos)")
+		expr := "view.getInt8(pos)"
 		fmt.Fprintf(b, "%s%s = %s;\n", indent, access, tsDeserializeValueExpr(expr, f, enumNames))
-		b.WriteString(fmt.Sprintf("%spos += 1;\n", indent))
+		fmt.Fprintf(b, "%spos += 1;\n", indent)
 	case parser.KindUint8:
-		expr := fmt.Sprintf("view.getUint8(pos)")
+		expr := "view.getUint8(pos)"
 		fmt.Fprintf(b, "%s%s = %s;\n", indent, access, tsDeserializeValueExpr(expr, f, enumNames))
-		b.WriteString(fmt.Sprintf("%spos += 1;\n", indent))
+		fmt.Fprintf(b, "%spos += 1;\n", indent)
 	case parser.KindBool:
-		expr := fmt.Sprintf("view.getUint8(pos) !== 0")
+		expr := "view.getUint8(pos) !== 0"
 		fmt.Fprintf(b, "%s%s = %s;\n", indent, access, tsDeserializeValueExpr(expr, f, enumNames))
-		b.WriteString(fmt.Sprintf("%spos += 1;\n", indent))
+		fmt.Fprintf(b, "%spos += 1;\n", indent)
 	case parser.KindInt16:
-		expr := fmt.Sprintf("view.getInt16(pos, true)")
+		expr := "view.getInt16(pos, true)"
 		fmt.Fprintf(b, "%s%s = %s;\n", indent, access, tsDeserializeValueExpr(expr, f, enumNames))
-		b.WriteString(fmt.Sprintf("%spos += 2;\n", indent))
+		fmt.Fprintf(b, "%spos += 2;\n", indent)
 	case parser.KindUint16:
-		expr := fmt.Sprintf("view.getUint16(pos, true)")
+		expr := "view.getUint16(pos, true)"
 		fmt.Fprintf(b, "%s%s = %s;\n", indent, access, tsDeserializeValueExpr(expr, f, enumNames))
-		b.WriteString(fmt.Sprintf("%spos += 2;\n", indent))
+		fmt.Fprintf(b, "%spos += 2;\n", indent)
 	case parser.KindInt32:
-		expr := fmt.Sprintf("view.getInt32(pos, true)")
+		expr := "view.getInt32(pos, true)"
 		fmt.Fprintf(b, "%s%s = %s;\n", indent, access, tsDeserializeValueExpr(expr, f, enumNames))
-		b.WriteString(fmt.Sprintf("%spos += 4;\n", indent))
+		fmt.Fprintf(b, "%spos += 4;\n", indent)
 	case parser.KindUint32:
-		expr := fmt.Sprintf("view.getUint32(pos, true)")
+		expr := "view.getUint32(pos, true)"
 		fmt.Fprintf(b, "%s%s = %s;\n", indent, access, tsDeserializeValueExpr(expr, f, enumNames))
-		b.WriteString(fmt.Sprintf("%spos += 4;\n", indent))
+		fmt.Fprintf(b, "%spos += 4;\n", indent)
 	case parser.KindInt64:
-		expr := fmt.Sprintf("view.getBigInt64(pos, true)")
+		expr := "view.getBigInt64(pos, true)"
 		fmt.Fprintf(b, "%s%s = %s;\n", indent, access, tsDeserializeValueExpr(expr, f, enumNames))
-		b.WriteString(fmt.Sprintf("%spos += 8;\n", indent))
+		fmt.Fprintf(b, "%spos += 8;\n", indent)
 	case parser.KindUint64:
-		expr := fmt.Sprintf("view.getBigUint64(pos, true)")
+		expr := "view.getBigUint64(pos, true)"
 		fmt.Fprintf(b, "%s%s = %s;\n", indent, access, tsDeserializeValueExpr(expr, f, enumNames))
-		b.WriteString(fmt.Sprintf("%spos += 8;\n", indent))
+		fmt.Fprintf(b, "%spos += 8;\n", indent)
 	case parser.KindString:
 		lenVar := "_slen" + sanitizeVarName(access)
 		fmt.Fprintf(b, "%sconst %s = view.getUint16(pos, true);\n", indent, lenVar)
-		b.WriteString(fmt.Sprintf("%spos += 2;\n", indent))
+		fmt.Fprintf(b, "%spos += 2;\n", indent)
 		expr := fmt.Sprintf("new TextDecoder().decode(new Uint8Array(view.buffer, pos, %s))", lenVar)
 		fmt.Fprintf(b, "%s%s = %s;\n", indent, access, tsDeserializeValueExpr(expr, f, enumNames))
 		fmt.Fprintf(b, "%spos += %s;\n", indent, lenVar)
@@ -512,12 +512,12 @@ func writeTSDeserializeQuant(b *strings.Builder, access string, f parser.Field, 
 	varName := "_q" + sanitizeVarName(access)
 	if q.Bits == 8 {
 		fmt.Fprintf(b, "%sconst %s = view.getUint8(pos);\n", indent, varName)
-		b.WriteString(fmt.Sprintf("%spos += 1;\n", indent))
+		fmt.Fprintf(b, "%spos += 1;\n", indent)
 		expr := fmt.Sprintf("%s / %g * (%g - (%g)) + (%g)", varName, maxUint, q.Max, q.Min, q.Min)
 		fmt.Fprintf(b, "%s%s = %s;\n", indent, access, tsDeserializeValueExpr(expr, f, nil))
 	} else {
 		fmt.Fprintf(b, "%sconst %s = view.getUint16(pos, true);\n", indent, varName)
-		b.WriteString(fmt.Sprintf("%spos += 2;\n", indent))
+		fmt.Fprintf(b, "%spos += 2;\n", indent)
 		expr := fmt.Sprintf("%s / %g * (%g - (%g)) + (%g)", varName, maxUint, q.Max, q.Min, q.Min)
 		fmt.Fprintf(b, "%s%s = %s;\n", indent, access, tsDeserializeValueExpr(expr, f, nil))
 	}
@@ -530,12 +530,12 @@ func writeTSDeserializeQuantElement(b *strings.Builder, access string, f parser.
 	varName := "_q" + sanitizeVarName(access)
 	if q.Bits == 8 {
 		fmt.Fprintf(b, "%sconst %s = view.getUint8(pos);\n", indent, varName)
-		b.WriteString(fmt.Sprintf("%spos += 1;\n", indent))
+		fmt.Fprintf(b, "%spos += 1;\n", indent)
 		expr := fmt.Sprintf("%s / %g * (%g - (%g)) + (%g)", varName, maxUint, q.Max, q.Min, q.Min)
 		fmt.Fprintf(b, "%s%s = %s;\n", indent, access, tsDeserializeValueExpr(expr, f, nil))
 	} else {
 		fmt.Fprintf(b, "%sconst %s = view.getUint16(pos, true);\n", indent, varName)
-		b.WriteString(fmt.Sprintf("%spos += 2;\n", indent))
+		fmt.Fprintf(b, "%spos += 2;\n", indent)
 		expr := fmt.Sprintf("%s / %g * (%g - (%g)) + (%g)", varName, maxUint, q.Max, q.Min, q.Min)
 		fmt.Fprintf(b, "%s%s = %s;\n", indent, access, tsDeserializeValueExpr(expr, f, nil))
 	}

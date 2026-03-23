@@ -1,10 +1,11 @@
 package generator
 
 import (
-	"github.com/edmand46/arpack/parser"
 	"fmt"
 	"go/format"
 	"strings"
+
+	"github.com/edmand46/arpack/parser"
 )
 
 func GenerateGo(messages []parser.Message, pkgName string) ([]byte, error) {

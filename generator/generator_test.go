@@ -1,12 +1,13 @@
 package generator
 
 import (
-	"github.com/edmand46/arpack/parser"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/edmand46/arpack/parser"
 )
 
 const samplePath = "../testdata/sample.go"
