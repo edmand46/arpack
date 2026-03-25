@@ -69,6 +69,13 @@ func writeLuaHelpers(b *strings.Builder) {
 	b.WriteString("    end\n")
 	b.WriteString("end\n\n")
 
+	b.WriteString("local function ensure_u16_limit(n, context)\n")
+	b.WriteString("    if n < 0 or n > 65535 then\n")
+	b.WriteString("        error(string.format(\"arpack: %s exceeds uint16 limit: %d\", context, n))\n")
+	b.WriteString("    end\n")
+	b.WriteString("    return n\n")
+	b.WriteString("end\n\n")
+
 	b.WriteString("local function read_u8(data, offset)\n")
 	b.WriteString("    if offset > #data then error(\"arpack: buffer too short for u8\") end\n")
 	b.WriteString("    return string.byte(data, offset), 1\n")
@@ -304,6 +311,7 @@ func writeLuaHelpers(b *strings.Builder) {
 
 	b.WriteString("local function write_string(s)\n")
 	b.WriteString("    local len = #s\n")
+	b.WriteString("    ensure_u16_limit(len, \"string length\")\n")
 	b.WriteString("    return write_u16_le(len) .. s\n")
 	b.WriteString("end\n\n")
 }
@@ -430,6 +438,7 @@ func writeLuaSerializeField(b *strings.Builder, recv string, f parser.Field, ind
 	case parser.KindSlice:
 		lenVar := "_len_" + strings.ToLower(f.Name)
 		fmt.Fprintf(b, "%slocal %s = #(%s or {})\n", indent, lenVar, access)
+		fmt.Fprintf(b, "%s%s = ensure_u16_limit(%s, %q)\n", indent, lenVar, lenVar, "slice length for "+luaFieldName(f.Name))
 		fmt.Fprintf(b, "%spart_idx = part_idx + 1; parts[part_idx] = write_u16_le(%s)\n", indent, lenVar)
 		iVar := "_i_" + strings.ToLower(f.Name)
 		fmt.Fprintf(b, "%sfor %s = 1, %s do\n", indent, iVar, lenVar)
@@ -497,7 +506,7 @@ func writeLuaSerializeQuant(b *strings.Builder, access string, f parser.Field, i
 	q := f.Quant
 	maxUint := q.MaxUint()
 	varName := "_q_" + sanitizeLuaVarName(access)
-	fmt.Fprintf(b, "%slocal %s = math.floor(((%s - (%g)) / (%g - (%g))) * %g + 0.5)\n",
+	fmt.Fprintf(b, "%slocal %s = math.floor(((%s - (%g)) / (%g - (%g))) * %g)\n",
 		indent, varName, access, q.Min, q.Max, q.Min, maxUint)
 	if q.Bits == 8 {
 		fmt.Fprintf(b, "%spart_idx = part_idx + 1; parts[part_idx] = write_u8(%s)\n", indent, varName)

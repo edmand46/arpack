@@ -98,12 +98,12 @@ func TestGenerateTypeScript_QuantizedFloats(t *testing.T) {
 	code := string(src)
 
 	// Check 8-bit quantization (using camelCase field names)
-	if !strings.Contains(code, "Math.round((this.q8 - (0)) / (100 - (0)) * 255)") {
+	if !strings.Contains(code, "Math.trunc((this.q8 - (0)) / (100 - (0)) * 255)") {
 		t.Error("Missing 8-bit quantization code")
 	}
 
 	// Check 16-bit quantization (using camelCase field names)
-	if !strings.Contains(code, "Math.round((this.q16 - (-500)) / (500 - (-500)) * 65535)") {
+	if !strings.Contains(code, "Math.trunc((this.q16 - (-500)) / (500 - (-500)) * 65535)") {
 		t.Error("Missing 16-bit quantization code")
 	}
 

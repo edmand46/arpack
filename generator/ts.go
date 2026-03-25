@@ -287,12 +287,12 @@ func writeTSSerializeQuant(b *strings.Builder, access string, f parser.Field, in
 	maxUint := q.MaxUint()
 	varName := "_q" + sanitizeVarName(access)
 	if q.Bits == 8 {
-		fmt.Fprintf(b, "%sconst %s = Math.round((%s - (%g)) / (%g - (%g)) * %g);\n",
+		fmt.Fprintf(b, "%sconst %s = Math.trunc((%s - (%g)) / (%g - (%g)) * %g);\n",
 			indent, varName, access, q.Min, q.Max, q.Min, maxUint)
 		fmt.Fprintf(b, "%sview.setUint8(pos, %s);\n", indent, varName)
 		fmt.Fprintf(b, "%spos += 1;\n", indent)
 	} else {
-		fmt.Fprintf(b, "%sconst %s = Math.round((%s - (%g)) / (%g - (%g)) * %g);\n",
+		fmt.Fprintf(b, "%sconst %s = Math.trunc((%s - (%g)) / (%g - (%g)) * %g);\n",
 			indent, varName, access, q.Min, q.Max, q.Min, maxUint)
 		fmt.Fprintf(b, "%sview.setUint16(pos, %s, true);\n", indent, varName)
 		fmt.Fprintf(b, "%spos += 2;\n", indent)
@@ -305,12 +305,12 @@ func writeTSSerializeQuantElement(b *strings.Builder, access string, f parser.Fi
 	maxUint := q.MaxUint()
 	varName := "_q" + sanitizeVarName(access)
 	if q.Bits == 8 {
-		fmt.Fprintf(b, "%sconst %s = Math.round((%s - (%g)) / (%g - (%g)) * %g);\n",
+		fmt.Fprintf(b, "%sconst %s = Math.trunc((%s - (%g)) / (%g - (%g)) * %g);\n",
 			indent, varName, access, q.Min, q.Max, q.Min, maxUint)
 		fmt.Fprintf(b, "%sview.setUint8(pos, %s);\n", indent, varName)
 		fmt.Fprintf(b, "%spos += 1;\n", indent)
 	} else {
-		fmt.Fprintf(b, "%sconst %s = Math.round((%s - (%g)) / (%g - (%g)) * %g);\n",
+		fmt.Fprintf(b, "%sconst %s = Math.trunc((%s - (%g)) / (%g - (%g)) * %g);\n",
 			indent, varName, access, q.Min, q.Max, q.Min, maxUint)
 		fmt.Fprintf(b, "%sview.setUint16(pos, %s, true);\n", indent, varName)
 		fmt.Fprintf(b, "%spos += 2;\n", indent)

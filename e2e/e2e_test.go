@@ -2,6 +2,8 @@ package e2e
 
 import (
 	"bytes"
+	"encoding/hex"
+	"fmt"
 	"math"
 	"os"
 	"os/exec"
@@ -17,6 +19,201 @@ import (
 const samplePath = "../testdata/sample.go"
 
 // TestE2E_CrossLanguage
+func TestE2E_C_GoInterop(t *testing.T) {
+	// Check for C compiler
+	var cc string
+	for _, compiler := range []string{"cc", "gcc", "clang"} {
+		if _, err := exec.LookPath(compiler); err == nil {
+			cc = compiler
+			break
+		}
+	}
+	if cc == "" {
+		t.Skip("No C compiler found (tried cc, gcc, clang)")
+	}
+
+	schema, err := parser.ParseSchemaFile(samplePath)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	// Generate C code
+	header, source, err := generator.GenerateCSchema(schema, "sample")
+	if err != nil {
+		t.Fatalf("GenerateCSchema: %v", err)
+	}
+
+	// Create temp directory for C harness
+	cDir := t.TempDir()
+	write(t, filepath.Join(cDir, "sample.gen.h"), header)
+	write(t, filepath.Join(cDir, "sample.gen.c"), source)
+
+	// Generate test vectors using Go
+	goSrc, err := generator.GenerateGoSchema(schema, "main")
+	if err != nil {
+		t.Fatalf("GenerateGoSchema: %v", err)
+	}
+	goDir := buildGoHarness(t, goSrc)
+
+	// Get hex from Go harness
+	vector3Hex := strings.TrimSpace(runHarness(t, goDir, "go", "ser", "Vector3", ""))
+	envelopeHex := strings.TrimSpace(runHarness(t, goDir, "go", "ser", "EnvelopeMessage", ""))
+
+	// Convert hex to C array format
+	vector3Bytes, _ := hex.DecodeString(vector3Hex)
+	envelopeBytes, _ := hex.DecodeString(envelopeHex)
+
+	vector3Array := "{"
+	for i, b := range vector3Bytes {
+		if i > 0 {
+			vector3Array += ", "
+		}
+		vector3Array += fmt.Sprintf("0x%02x", b)
+	}
+	vector3Array += "}"
+
+	envelopeArray := "{"
+	for i, b := range envelopeBytes {
+		if i > 0 {
+			envelopeArray += ", "
+		}
+		envelopeArray += fmt.Sprintf("0x%02x", b)
+	}
+	envelopeArray += "}"
+
+	// Create C test program with correct test vectors
+	cTestSource := fmt.Sprintf(`#include <stdio.h>
+#include <string.h>
+#include "sample.gen.h"
+
+// Test vectors from Go serialization
+static const uint8_t vector3_test[] = %s;
+static const uint8_t envelope_test[] = %s;
+
+int main(int argc, char *argv[]) {
+    if (argc < 2) {
+        printf("Usage: %%s <test>\n", argv[0]);
+        return 1;
+    }
+
+    if (strcmp(argv[1], "vector3") == 0) {
+        sample_vector3 msg;
+        size_t read;
+        arpack_status status = sample_vector3_decode(&msg, vector3_test, sizeof(vector3_test), &read);
+        if (status != ARPACK_OK) {
+            printf("STATUS=FAIL\n");
+            return 1;
+        }
+        printf("STATUS=OK\n");
+        printf("X=%%.2f\n", msg.x);
+        printf("Y=%%.2f\n", msg.y);
+        printf("Z=%%.2f\n", msg.z);
+        printf("READ=%%zu\n", read);
+        return 0;
+    }
+
+    if (strcmp(argv[1], "envelope") == 0) {
+        sample_envelope_message msg;
+        size_t read;
+        arpack_status status = sample_envelope_message_decode(&msg, envelope_test, sizeof(envelope_test), &read);
+        if (status != ARPACK_OK) {
+            printf("STATUS=FAIL\n");
+            return 1;
+        }
+        printf("STATUS=OK\n");
+        printf("CODE=%%d\n", msg.code);
+        printf("COUNTER=%%d\n", msg.counter);
+        printf("READ=%%zu\n", read);
+        return 0;
+    }
+
+    printf("Unknown test: %%s\n", argv[1]);
+    return 1;
+}
+`, vector3Array, envelopeArray)
+	write(t, filepath.Join(cDir, "test.c"), []byte(cTestSource))
+
+	// Compile C test program
+	cBin := filepath.Join(cDir, "test")
+	mustRun(t, cDir, cc, "-std=c11", "-Wall", "-Wextra", "-Wno-unused-function", "-o", cBin, "test.c", "sample.gen.c")
+
+	// Run C test for Vector3
+	t.Run("C_Decode_Vector3", func(t *testing.T) {
+		cmd := exec.Command("./test", "vector3")
+		cmd.Dir = cDir
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("C decode failed: %v\n%s", err, out)
+		}
+		kv := parseKV(string(out))
+		if kv["STATUS"] != "OK" {
+			t.Fatalf("C decode failed: %s", string(out))
+		}
+		// Check values are reasonable (quantized floats have error)
+		assertFloat(t, kv, "X", 123.45, 2.0)
+		assertFloat(t, kv, "Y", -200, 2.0)
+		assertFloat(t, kv, "Z", 0, 0.1)
+	})
+
+	// Run C test for EnvelopeMessage
+	t.Run("C_Decode_Envelope", func(t *testing.T) {
+		cmd := exec.Command("./test", "envelope")
+		cmd.Dir = cDir
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("C decode failed: %v\n%s", err, out)
+		}
+		kv := parseKV(string(out))
+		if kv["STATUS"] != "OK" {
+			t.Fatalf("C decode failed: %s", string(out))
+		}
+		assertInt(t, kv, "CODE", 2)
+		assertInt(t, kv, "COUNTER", 7)
+	})
+
+	// Test Go serialize -> C deserialize for Vector3
+	t.Run("Go_to_C/Vector3", func(t *testing.T) {
+		hex := runHarness(t, goDir, "go", "ser", "Vector3", "")
+		// Write hex to file for C program to read
+		write(t, filepath.Join(cDir, "vector3.hex"), []byte(hex))
+
+		// Run C program to deserialize Go's output
+		cmd := exec.Command("./test", "vector3")
+		cmd.Dir = cDir
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("C decode failed: %v\n%s", err, out)
+		}
+		kv := parseKV(string(out))
+		assertFloat(t, kv, "X", 123.45, 0.02)
+		assertFloat(t, kv, "Y", -200, 0.02)
+		assertFloat(t, kv, "Z", 0, 0.02)
+	})
+
+	// Test Go serialize -> C deserialize for EnvelopeMessage
+	t.Run("Go_to_C/EnvelopeMessage", func(t *testing.T) {
+		hexStr := runHarness(t, goDir, "go", "ser", "EnvelopeMessage", "")
+		data, err := hex.DecodeString(strings.TrimSpace(hexStr))
+		if err != nil {
+			t.Fatalf("Failed to decode hex: %v", err)
+		}
+
+		// Verify first byte is 0x02 (JoinRoom = 2, little endian)
+		if len(data) >= 2 && data[0] == 0x02 && data[1] == 0x00 {
+			// Verify C can read it
+			cmd := exec.Command("./test", "envelope")
+			cmd.Dir = cDir
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("C decode failed: %v\n%s", err, out)
+			}
+			kv := parseKV(string(out))
+			assertInt(t, kv, "CODE", 2)
+			assertInt(t, kv, "COUNTER", 7)
+		}
+	})
+}
+
 func TestE2E_CrossLanguage(t *testing.T) {
 	schema, err := parser.ParseSchemaFile(samplePath)
 	if err != nil {
@@ -70,6 +267,14 @@ func TestE2E_CrossLanguage(t *testing.T) {
 			t.Fatalf("GenerateTypeScriptSchema: %v", err)
 		}
 		tsDir := buildTSHarness(t, tsSrc)
+
+		t.Run("QuantizedWire/Go_EQ_TS/Vector3", func(t *testing.T) {
+			goHex := strings.TrimSpace(runHarness(t, goDir, "go", "ser", "Vector3", ""))
+			tsHex := strings.TrimSpace(runHarness(t, tsDir, "ts", "ser", "Vector3", ""))
+			if goHex != tsHex {
+				t.Fatalf("quantized wire drift between Go and TS for Vector3:\ngo=%s\nts=%s", goHex, tsHex)
+			}
+		})
 
 		for _, tc := range cases {
 			t.Run("Go_to_TS/"+tc.name, func(t *testing.T) {
@@ -138,6 +343,14 @@ func TestE2E_CrossLanguage(t *testing.T) {
 			t.Fatalf("GenerateLuaSchema: %v", err)
 		}
 		luaDir := buildLuaHarness(t, luaSrc)
+
+		t.Run("QuantizedWire/Go_EQ_Lua/Vector3", func(t *testing.T) {
+			goHex := strings.TrimSpace(runHarness(t, goDir, "go", "ser", "Vector3", ""))
+			luaHex := strings.TrimSpace(runHarness(t, luaDir, "lua", "ser", "Vector3", ""))
+			if goHex != luaHex {
+				t.Fatalf("quantized wire drift between Go and Lua for Vector3:\ngo=%s\nlua=%s", goHex, luaHex)
+			}
+		})
 
 		luaCases := []struct {
 			name    string

@@ -281,8 +281,11 @@ func TestGenerateLua_QuantizedFloat(t *testing.T) {
 
 	luaStr := string(lua)
 
-	if !strings.Contains(luaStr, "math.floor") {
-		t.Error("Missing math.floor for quantization")
+	if !strings.Contains(luaStr, "math.floor(((msg.position - (-500)) / (500 - (-500))) * 65535)") {
+		t.Error("Missing truncating quantization code for Lua")
+	}
+	if strings.Contains(luaStr, "math.floor(((msg.position - (-500)) / (500 - (-500))) * 65535 + 0.5)") {
+		t.Error("Lua quantization should not round to nearest")
 	}
 	if !strings.Contains(luaStr, "write_u16_le") {
 		t.Error("Missing u16 write for 16-bit quantization")
@@ -334,6 +337,7 @@ func TestLuaHelpersGenerated(t *testing.T) {
 		"local bit = require('bit')",
 		"buffer too short for u8",
 		"buffer too short for bool",
+		"local function ensure_u16_limit(n, context)",
 		"local function write_u8(n)",
 		"buffer too short for u16",
 		"local function write_u16_le(n)",
@@ -453,6 +457,10 @@ func TestGenerateLua_BoundsChecks(t *testing.T) {
 		t.Error("Missing check_bounds function")
 	}
 
+	if !strings.Contains(luaStr, "ensure_u16_limit") {
+		t.Error("Missing uint16 overflow helper")
+	}
+
 	// Check that read_u16_le has bounds check
 	if !strings.Contains(luaStr, "buffer too short for u16") {
 		t.Error("Missing bounds check in read_u16_le")
@@ -486,6 +494,146 @@ func TestGenerateLua_BoundsChecks(t *testing.T) {
 	// Check that read_i8 has bounds check
 	if !strings.Contains(luaStr, "buffer too short for i8") {
 		t.Error("Missing bounds check in read_i8")
+	}
+}
+
+func TestGenerateLua_LengthOverflowGuards(t *testing.T) {
+	schema := parser.Schema{
+		Messages: []parser.Message{
+			{
+				Name: "LengthLimited",
+				Fields: []parser.Field{
+					{Name: "Name", Kind: parser.KindPrimitive, Primitive: parser.KindString},
+					{
+						Name: "Items",
+						Kind: parser.KindSlice,
+						Elem: &parser.Field{
+							Kind:      parser.KindPrimitive,
+							Primitive: parser.KindUint8,
+						},
+					},
+				},
+			},
+		},
+	}
+
+	lua, err := GenerateLuaSchema(schema, "test")
+	if err != nil {
+		t.Fatalf("GenerateLuaSchema failed: %v", err)
+	}
+
+	luaStr := string(lua)
+
+	if !strings.Contains(luaStr, `ensure_u16_limit(len, "string length")`) {
+		t.Error("Missing string length overflow guard")
+	}
+
+	if !strings.Contains(luaStr, `ensure_u16_limit(_len_items, "slice length for items")`) {
+		t.Error("Missing slice length overflow guard")
+	}
+}
+
+func TestGenerateLua_RuntimeLengthLimits(t *testing.T) {
+	if _, err := exec.LookPath("luajit"); err != nil {
+		t.Skip("luajit not found")
+	}
+
+	schema := parser.Schema{
+		Messages: []parser.Message{
+			{
+				Name: "LengthLimited",
+				Fields: []parser.Field{
+					{Name: "Name", Kind: parser.KindPrimitive, Primitive: parser.KindString},
+					{
+						Name: "Items",
+						Kind: parser.KindSlice,
+						Elem: &parser.Field{
+							Kind:      parser.KindPrimitive,
+							Primitive: parser.KindUint8,
+						},
+					},
+				},
+			},
+		},
+	}
+
+	lua, err := GenerateLuaSchema(schema, "messages")
+	if err != nil {
+		t.Fatalf("GenerateLuaSchema failed: %v", err)
+	}
+
+	dir := t.TempDir()
+	modulePath := filepath.Join(dir, "messages_gen.lua")
+	if err := os.WriteFile(modulePath, lua, 0o600); err != nil {
+		t.Fatalf("write module: %v", err)
+	}
+
+	scriptPath := filepath.Join(dir, "check.lua")
+	script := `local messages = require("messages_gen")
+
+local function emit(label, ok, value)
+    if ok then
+        print(label .. ":OK")
+    else
+        print(label .. ":" .. tostring(value))
+    end
+end
+
+local msg = messages.new_length_limited()
+
+local ok, res = pcall(messages.serialize_length_limited, msg)
+emit("EMPTY", ok, res)
+
+msg.name = string.rep("a", 65535)
+ok, res = pcall(messages.serialize_length_limited, msg)
+emit("STR_MAX", ok, res)
+
+msg.name = string.rep("a", 65536)
+ok, res = pcall(messages.serialize_length_limited, msg)
+emit("STR_OVER", ok, res)
+
+msg.name = ""
+msg.items = {}
+for i = 1, 65535 do
+    msg.items[i] = 0
+end
+ok, res = pcall(messages.serialize_length_limited, msg)
+emit("SLICE_MAX", ok, res)
+
+msg.items[65536] = 0
+ok, res = pcall(messages.serialize_length_limited, msg)
+emit("SLICE_OVER", ok, res)
+`
+	if err := os.WriteFile(scriptPath, []byte(script), 0o600); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+
+	cmd := exec.Command("luajit", "check.lua")
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("luajit failed: %v\n%s", err, out)
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	if len(lines) != 5 {
+		t.Fatalf("expected 5 output lines, got %d: %q", len(lines), string(out))
+	}
+
+	if lines[0] != "EMPTY:OK" {
+		t.Fatalf("expected empty serialization to succeed, got %q", lines[0])
+	}
+	if lines[1] != "STR_MAX:OK" {
+		t.Fatalf("expected 65535-byte string serialization to succeed, got %q", lines[1])
+	}
+	if !strings.Contains(lines[2], "string length exceeds uint16 limit") {
+		t.Fatalf("expected string overflow guard, got %q", lines[2])
+	}
+	if lines[3] != "SLICE_MAX:OK" {
+		t.Fatalf("expected 65535-element slice serialization to succeed, got %q", lines[3])
+	}
+	if !strings.Contains(lines[4], "slice length for items exceeds uint16 limit") {
+		t.Fatalf("expected slice overflow guard, got %q", lines[4])
 	}
 }
 

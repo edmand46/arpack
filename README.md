@@ -9,16 +9,16 @@
 ![GitHub License](https://img.shields.io/github/license/edmand46/arpack)
 
 
-Binary serialization code generator for Go, C#, TypeScript, and Lua. Define messages once as Go structs — get zero-allocation `Marshal`/`Unmarshal` for Go, `unsafe` pointer-based `Serialize`/`Deserialize` for C#, `DataView`-based serialization for TypeScript/browser, and pure Lua implementation for Defold/LuaJIT.
+Binary serialization code generator for Go, C#, TypeScript, Lua, and C. Define messages once as Go structs — get zero-allocation `Marshal`/`Unmarshal` for Go, `unsafe` pointer-based `Serialize`/`Deserialize` for C#, `DataView`-based serialization for TypeScript/browser, pure Lua implementation for Defold/LuaJIT, and explicit encode/decode functions for C.
 
 ## Features
 
-- **Single source of truth** — define messages in Go, generate code for Go, C#, TypeScript, and Lua
+- **Single source of truth** — define messages in Go, generate code for Go, C#, TypeScript, Lua, and C
 - **Float quantization** — compress `float32`/`float64` to 8 or 16 bits with a `pack` struct tag
 - **Boolean packing** — consecutive `bool` fields are packed into single bytes (up to 8 per byte)
 - **Enums** — `type Opcode uint16` + `const` block becomes C#/TypeScript enums
 - **Nested types, fixed arrays, slices** — full support for complex message structures
-- **Cross-language binary compatibility** — Go, C#, TypeScript, and Lua produce identical wire formats
+- **Cross-language binary compatibility** — Go, C#, TypeScript, Lua, and C produce identical wire formats
 - **Browser support** — TypeScript target uses native DataView API for zero-dependency serialization
 
 ## When to use
@@ -32,6 +32,7 @@ Typical setups:
 - **Any Go service + .NET client** — works anywhere you control both ends and want a compact binary protocol without Protobuf's runtime overhead or code-gen complexity.
 - **Go backend + Browser/WebSocket** — generate TypeScript classes for browser-based clients. Uses native DataView API with zero dependencies.
 - **Go backend + Defold/Lua** — generate Lua modules for Defold game engine. Pure Lua implementation compatible with LuaJIT.
+- **Go backend + Defold/C** — generate C code for Defold native extensions. Maximum performance for Defold games with C extensions.
 
 ## Installation
 
@@ -50,6 +51,9 @@ arpack -in messages.go -out-ts ./web/src/messages
 
 # Generate only Lua (for Defold)
 arpack -in messages.go -out-lua ./defold/scripts/messages
+
+# Generate C for Defold native extension
+arpack -in messages.go -out-c ./defold/extension/src
 ```
 
 | Flag | Description |
@@ -59,6 +63,7 @@ arpack -in messages.go -out-lua ./defold/scripts/messages
 | `-out-cs` | Output directory for generated C# code |
 | `-out-ts` | Output directory for generated TypeScript code |
 | `-out-lua` | Output directory for generated Lua code |
+| `-out-c` | Output directory for generated C code (for Defold native extensions) |
 | `-cs-namespace` | C# namespace (default: `Arpack.Messages`) |
 
 **Output files:**
@@ -66,6 +71,7 @@ arpack -in messages.go -out-lua ./defold/scripts/messages
 - C#: `{Name}.gen.cs`
 - TypeScript: `{Name}.gen.ts`
 - Lua: `{name}_gen.lua` (snake_case for Lua `require()` compatibility)
+- C: `{name}.gen.h` and `{name}.gen.c` (snake_case for C conventions)
 
 ## Schema Definition
 
@@ -198,9 +204,48 @@ Uses pure Lua with inline helper functions for byte manipulation. Compatible wit
 
 **Requirements:** The generated Lua code requires the [BitOp library](https://bitop.luajit.org/) for bit manipulation. This library is included in LuaJIT (used by Defold).
 
-**Limitations:** 
+**Limitations:**
 - Lua target does not support `int64`/`uint64` types. Use `int32`/`uint32` instead. This is because LuaJIT represents numbers as double-precision floats, which can only safely represent integers up to 2^53.
+- Variable-length fields use `uint16` length prefixes, so `string` byte length and `[]T` element count must not exceed `65535`. Serialization raises an error if the limit is exceeded.
+- Deserialization raises Lua errors on malformed or truncated input. If you need a recoverable boundary, wrap decode calls in `pcall(...)`.
 - Generated file uses snake_case naming (e.g., `messages_gen.lua`) for proper Lua `require()` resolution.
+
+### C
+
+```c
+#include "messages.gen.h"
+
+// Fixed-size message (no context needed)
+sample_envelope_message msg = {
+    .code = sample_opcode_authorize,
+    .counter = 42
+};
+
+uint8_t buf[64];
+size_t written;
+arpack_status status = sample_envelope_message_encode(&msg, buf, sizeof(buf), &written);
+
+// Variable-length message (requires decode context)
+sample_spawn_message_decode_ctx ctx = {
+    .tags_data = tags_buffer,
+    .tags_cap = MAX_TAGS
+};
+sample_spawn_message decoded;
+status = sample_spawn_message_decode(&decoded, buf, buf_len, &ctx, &read);
+```
+
+Generates two files: `{name}.gen.h` (declarations) and `{name}.gen.c` (implementations). Uses explicit encode/decode functions with bounds checking. All symbols are prefixed with `{name}_` to avoid collisions.
+
+**API Shape:**
+- Fixed-size messages: `{name}_{msg}_min_size()`, `{name}_{msg}_encode()`, `{name}_{msg}_decode()`
+- Variable-length messages: Additional `{name}_{msg}_size()` and decode context struct
+- Strings and byte slices are views into the input buffer (zero-copy)
+- Other slices require caller-provided storage via decode context
+
+**Limitations:**
+- C11 standard required
+- Variable-length slice fields require caller-provided storage (no hidden allocations)
+- Wire format is not a packed C struct — use the generated encode/decode functions
 
 ## Wire Format
 
