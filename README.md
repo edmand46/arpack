@@ -9,16 +9,16 @@
 ![GitHub License](https://img.shields.io/github/license/edmand46/arpack)
 
 
-Binary serialization code generator for Go, C#, and TypeScript. Define messages once as Go structs — get zero-allocation `Marshal`/`Unmarshal` for Go, `unsafe` pointer-based `Serialize`/`Deserialize` for C#, and `DataView`-based serialization for TypeScript/browser.
+Binary serialization code generator for Go, C#, TypeScript, and Lua. Define messages once as Go structs — get zero-allocation `Marshal`/`Unmarshal` for Go, `unsafe` pointer-based `Serialize`/`Deserialize` for C#, `DataView`-based serialization for TypeScript/browser, and pure Lua implementation for Defold/LuaJIT.
 
 ## Features
 
-- **Single source of truth** — define messages in Go, generate code for Go, C#, and TypeScript
+- **Single source of truth** — define messages in Go, generate code for Go, C#, TypeScript, and Lua
 - **Float quantization** — compress `float32`/`float64` to 8 or 16 bits with a `pack` struct tag
 - **Boolean packing** — consecutive `bool` fields are packed into single bytes (up to 8 per byte)
 - **Enums** — `type Opcode uint16` + `const` block becomes C#/TypeScript enums
 - **Nested types, fixed arrays, slices** — full support for complex message structures
-- **Cross-language binary compatibility** — Go, C#, and TypeScript produce identical wire formats
+- **Cross-language binary compatibility** — Go, C#, TypeScript, and Lua produce identical wire formats
 - **Browser support** — TypeScript target uses native DataView API for zero-dependency serialization
 
 ## When to use
@@ -31,6 +31,7 @@ Typical setups:
 - **Custom Go game server + Unity** — roll your own server without pulling in a serialization framework. ArPack generates plain `Marshal`/`Unmarshal` methods with zero allocations on the hot path.
 - **Any Go service + .NET client** — works anywhere you control both ends and want a compact binary protocol without Protobuf's runtime overhead or code-gen complexity.
 - **Go backend + Browser/WebSocket** — generate TypeScript classes for browser-based clients. Uses native DataView API with zero dependencies.
+- **Go backend + Defold/Lua** — generate Lua modules for Defold game engine. Pure Lua implementation compatible with LuaJIT.
 
 ## Installation
 
@@ -46,6 +47,9 @@ arpack -in messages.go -out-go ./gen -out-cs ../Unity/Assets/Scripts -out-ts ./w
 
 # Generate only TypeScript
 arpack -in messages.go -out-ts ./web/src/messages
+
+# Generate only Lua (for Defold)
+arpack -in messages.go -out-lua ./defold/scripts/messages
 ```
 
 | Flag | Description |
@@ -54,12 +58,14 @@ arpack -in messages.go -out-ts ./web/src/messages
 | `-out-go` | Output directory for generated Go code |
 | `-out-cs` | Output directory for generated C# code |
 | `-out-ts` | Output directory for generated TypeScript code |
+| `-out-lua` | Output directory for generated Lua code |
 | `-cs-namespace` | C# namespace (default: `Arpack.Messages`) |
 
 **Output files:**
 - Go: `{name}_gen.go`
 - C#: `{Name}.gen.cs`
 - TypeScript: `{Name}.gen.ts`
+- Lua: `{name}_gen.lua` (snake_case for Lua `require()` compatibility)
 
 ## Schema Definition
 
@@ -98,16 +104,19 @@ type MoveMessage struct {
 
 ### Supported Types
 
-| Type | Wire Size |
-|---|---|
-| `bool` (packed) | 1 bit (up to 8 per byte) |
-| `int8`, `uint8` | 1 byte |
-| `int16`, `uint16` | 2 bytes |
-| `int32`, `uint32`, `float32` | 4 bytes |
-| `int64`, `uint64`, `float64` | 8 bytes |
-| `string` | 2-byte length prefix + UTF-8 |
-| `[N]T` | N × sizeof(T) |
-| `[]T` | 2-byte length prefix + N × sizeof(T) |
+| Type | Wire Size | Lua Support |
+|---|---|---|
+| `bool` (packed) | 1 bit (up to 8 per byte) | ✓ (uses BitOp library) |
+| `int8`, `uint8` | 1 byte | ✓ |
+| `int16`, `uint16` | 2 bytes | ✓ |
+| `int32`, `uint32`, `float32` | 4 bytes | ✓ |
+| `int64`, `uint64` | 8 bytes | ✗ (LuaJIT limitation) |
+| `float64` | 8 bytes | ✓ |
+| `string` | 2-byte length prefix + UTF-8 | ✓ |
+| `[N]T` | N × sizeof(T) | ✓ |
+| `[]T` | 2-byte length prefix + N × sizeof(T) | ✓ |
+
+**Note:** `int64`/`uint64` are not supported in Lua target. LuaJIT (used by Defold) represents numbers as double-precision floats, which can only safely represent integers up to 2^53. Use `int32`/`uint32` instead.
 
 ### Float Quantization
 
@@ -167,6 +176,31 @@ export class MoveMessage {
 Uses native DataView API for browser-compatible serialization with zero dependencies. Returns bytes written/consumed.
 
 **Note:** TypeScript field names are converted to camelCase (e.g., `PlayerID` → `playerId`).
+
+### Lua
+
+```lua
+local messages = require("messages.messages_gen")
+
+-- Create message
+local msg = messages.new_move_message()
+msg.player_id = 123
+msg.active = true
+
+-- Serialize
+local data = messages.serialize_move_message(msg)
+
+-- Deserialize
+local decoded, bytes_read = messages.deserialize_move_message(data, 1)
+```
+
+Uses pure Lua with inline helper functions for byte manipulation. Compatible with LuaJIT (Defold). All identifiers use snake_case (e.g., `MoveMessage` → `move_message`, `PlayerID` → `player_id`).
+
+**Requirements:** The generated Lua code requires the [BitOp library](https://bitop.luajit.org/) for bit manipulation. This library is included in LuaJIT (used by Defold).
+
+**Limitations:** 
+- Lua target does not support `int64`/`uint64` types. Use `int32`/`uint32` instead. This is because LuaJIT represents numbers as double-precision floats, which can only safely represent integers up to 2^53.
+- Generated file uses snake_case naming (e.g., `messages_gen.lua`) for proper Lua `require()` resolution.
 
 ## Wire Format
 

@@ -17,6 +17,7 @@ func main() {
 	outGo := flag.String("out-go", "", "output directory for generated Go code")
 	outCS := flag.String("out-cs", "", "output directory for generated C# code")
 	outTS := flag.String("out-ts", "", "output directory for generated TypeScript code")
+	outLua := flag.String("out-lua", "", "output directory for generated Lua code")
 	namespace := flag.String("cs-namespace", "Arpack.Messages", "C# namespace")
 	flag.Parse()
 
@@ -24,8 +25,8 @@ func main() {
 		log.Fatal("arpack: -in is required")
 	}
 
-	if *outGo == "" && *outCS == "" && *outTS == "" {
-		log.Fatal("arpack: at least one of -out-go, -out-cs, or -out-ts is required")
+	if *outGo == "" && *outCS == "" && *outTS == "" && *outLua == "" {
+		log.Fatal("arpack: at least one of -out-go, -out-cs, -out-ts, or -out-lua is required")
 	}
 
 	schema, err := parser.ParseSchemaFile(*in)
@@ -96,8 +97,56 @@ func main() {
 
 		fmt.Printf("arpack: wrote %s\n", outPath)
 	}
+
+	if *outLua != "" {
+		src, err := generator.GenerateLuaSchema(schema, baseName)
+		if err != nil {
+			log.Fatalf("arpack: Lua generation error: %v", err)
+		}
+
+		// Use snake_case filename for Lua require() compatibility
+		outPath := filepath.Join(*outLua, toSnakeCase(baseName)+"_gen.lua")
+		if err := os.MkdirAll(*outLua, 0755); err != nil {
+			log.Fatalf("arpack: mkdir %s: %v", *outLua, err)
+		}
+		if err := os.WriteFile(outPath, src, 0644); err != nil {
+			log.Fatalf("arpack: write %s: %v", outPath, err)
+		}
+
+		fmt.Printf("arpack: wrote %s\n", outPath)
+	}
 }
 
 func toTitle(s string) string {
 	return strings.ToUpper(s[:1]) + strings.ToLower(s[1:])
+}
+
+func toSnakeCase(s string) string {
+	if s == "" {
+		return ""
+	}
+
+	var b strings.Builder
+	var prevUpper bool
+
+	for i, c := range s {
+		isUpper := c >= 'A' && c <= 'Z'
+
+		if i > 0 && isUpper {
+			nextLower := false
+			if i+1 < len(s) {
+				nextChar := rune(s[i+1])
+				nextLower = nextChar >= 'a' && nextChar <= 'z'
+			}
+
+			if !prevUpper || nextLower {
+				b.WriteByte('_')
+			}
+		}
+
+		b.WriteRune(c)
+		prevUpper = isUpper
+	}
+
+	return strings.ToLower(b.String())
 }

@@ -86,6 +86,84 @@ func TestE2E_CrossLanguage(t *testing.T) {
 	} else {
 		t.Log("node not found, skipping TypeScript cross-language e2e tests")
 	}
+
+	if _, err := exec.LookPath("luajit"); err == nil {
+		// Use a simpler test schema without int64/uint64 for Lua
+		luaSchema := parser.Schema{
+			Messages: []parser.Message{
+				{
+					Name: "Vector3",
+					Fields: []parser.Field{
+						{Name: "X", Kind: parser.KindPrimitive, Primitive: parser.KindFloat32, Quant: &parser.QuantInfo{Min: -500, Max: 500, Bits: 16}},
+						{Name: "Y", Kind: parser.KindPrimitive, Primitive: parser.KindFloat32, Quant: &parser.QuantInfo{Min: -500, Max: 500, Bits: 16}},
+						{Name: "Z", Kind: parser.KindPrimitive, Primitive: parser.KindFloat32, Quant: &parser.QuantInfo{Min: -500, Max: 500, Bits: 16}},
+					},
+				},
+				{
+					Name: "MoveMessage",
+					Fields: []parser.Field{
+						{Name: "Position", Kind: parser.KindNested, TypeName: "Vector3"},
+						{Name: "Velocity", Kind: parser.KindFixedArray, FixedLen: 3, Elem: &parser.Field{Kind: parser.KindPrimitive, Primitive: parser.KindFloat32}},
+						{Name: "Waypoints", Kind: parser.KindSlice, Elem: &parser.Field{Kind: parser.KindNested, TypeName: "Vector3"}},
+						{Name: "PlayerID", Kind: parser.KindPrimitive, Primitive: parser.KindUint32},
+						{Name: "Active", Kind: parser.KindPrimitive, Primitive: parser.KindBool},
+						{Name: "Visible", Kind: parser.KindPrimitive, Primitive: parser.KindBool},
+						{Name: "Ghost", Kind: parser.KindPrimitive, Primitive: parser.KindBool},
+						{Name: "Name", Kind: parser.KindPrimitive, Primitive: parser.KindString},
+					},
+				},
+				{
+					Name: "EnvelopeMessage",
+					Fields: []parser.Field{
+						{Name: "Code", Kind: parser.KindPrimitive, Primitive: parser.KindUint16},
+						{Name: "Counter", Kind: parser.KindPrimitive, Primitive: parser.KindUint8},
+					},
+				},
+			},
+			Enums: []parser.Enum{
+				{
+					Name:      "Opcode",
+					Primitive: parser.KindUint16,
+					Values: []parser.EnumValue{
+						{Name: "Unknown", Value: "0"},
+						{Name: "Join", Value: "1"},
+						{Name: "Leave", Value: "2"},
+					},
+				},
+			},
+		}
+
+		luaSrc, err := generator.GenerateLuaSchema(luaSchema, "messages")
+		if err != nil {
+			t.Fatalf("GenerateLuaSchema: %v", err)
+		}
+		luaDir := buildLuaHarness(t, luaSrc)
+
+		luaCases := []struct {
+			name    string
+			typ     string
+			epsilon float64
+		}{
+			{"Vector3", "Vector3", 0.02},
+			{"MoveMessage", "MoveMessage", 0.02},
+			{"EnvelopeMessage", "EnvelopeMessage", 0},
+		}
+
+		for _, tc := range luaCases {
+			t.Run("Go_to_Lua/"+tc.name, func(t *testing.T) {
+				hex := runHarness(t, goDir, "go", "ser", tc.typ, "")
+				out := runHarness(t, luaDir, "lua", "deser", tc.typ, hex)
+				checkOutput(t, tc.typ, out, tc.epsilon)
+			})
+			t.Run("Lua_to_Go/"+tc.name, func(t *testing.T) {
+				hex := runHarness(t, luaDir, "lua", "ser", tc.typ, "")
+				out := runHarness(t, goDir, "go", "deser", tc.typ, hex)
+				checkOutput(t, tc.typ, out, tc.epsilon)
+			})
+		}
+	} else {
+		t.Log("luajit not found, skipping Lua cross-language e2e tests")
+	}
 }
 
 func buildGoHarness(t *testing.T, generatedSrc []byte) string {
@@ -139,6 +217,16 @@ func buildTSHarness(t *testing.T, generatedSrc []byte) string {
 	return dir
 }
 
+func buildLuaHarness(t *testing.T, generatedSrc []byte) string {
+	t.Helper()
+	dir := t.TempDir()
+
+	write(t, filepath.Join(dir, "messages_gen.lua"), generatedSrc)
+	write(t, filepath.Join(dir, "harness.lua"), []byte(luaHarnessSource))
+
+	return dir
+}
+
 func runHarness(t *testing.T, dir, lang, op, typ, hexInput string) string {
 	t.Helper()
 	var cmd *exec.Cmd
@@ -161,6 +249,12 @@ func runHarness(t *testing.T, dir, lang, op, typ, hexInput string) string {
 			args = append(args, hexInput)
 		}
 		cmd = exec.Command("node", append([]string{filepath.Join(dir, "dist", "harness.js")}, args...)...)
+	case "lua":
+		args := []string{filepath.Join(dir, "harness.lua"), op, typ}
+		if hexInput != "" {
+			args = append(args, hexInput)
+		}
+		cmd = exec.Command("luajit", args...)
 	}
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
@@ -739,4 +833,112 @@ function main() {
 }
 
 main();
+`
+
+const luaHarnessSource = `-- Lua E2E Harness
+-- Usage: luajit harness.lua <op> <type> [hex_input]
+-- op: 'ser' or 'deser'
+-- type: message type name
+
+local messages = require("messages_gen")
+
+local function hexToBytes(hex)
+    local bytes = {}
+    for i = 1, #hex, 2 do
+        local byte = tonumber(hex:sub(i, i+1), 16)
+        table.insert(bytes, string.char(byte))
+    end
+    return table.concat(bytes)
+end
+
+local function bytesToHex(data)
+    local hex = {}
+    for i = 1, #data do
+        table.insert(hex, string.format("%02x", string.byte(data, i)))
+    end
+    return table.concat(hex)
+end
+
+local function serializeVector3()
+    local msg = messages.new_vector3()
+    msg.x = 123.45
+    msg.y = -200.0
+    msg.z = 0.0
+    return bytesToHex(messages.serialize_vector3(msg))
+end
+
+local function deserializeVector3(hex)
+    local data = hexToBytes(hex)
+    local msg = messages.deserialize_vector3(data, 1)
+    print(string.format("X=%.10g", msg.x))
+    print(string.format("Y=%.10g", msg.y))
+    print(string.format("Z=%.10g", msg.z))
+end
+
+local function serializeMoveMessage()
+    local msg = messages.new_move_message()
+    msg.position = messages.new_vector3()
+    msg.position.x = 10.0
+    msg.position.y = 20.0
+    msg.position.z = 30.0
+    msg.velocity = {1.0, 2.0, 3.0}
+    msg.waypoints = {}
+    local wp = messages.new_vector3()
+    wp.x = 10.0
+    wp.y = 20.0
+    wp.z = 0.0
+    table.insert(msg.waypoints, wp)
+    msg.player_id = 777
+    msg.active = true
+    msg.visible = false
+    msg.ghost = true
+    msg.name = "TestPlayer"
+    return bytesToHex(messages.serialize_move_message(msg))
+end
+
+local function deserializeMoveMessage(hex)
+    local data = hexToBytes(hex)
+    local msg = messages.deserialize_move_message(data, 1)
+    print(string.format("PlayerID=%d", msg.player_id))
+    print(string.format("Active=%s", tostring(msg.active)))
+    print(string.format("Visible=%s", tostring(msg.visible)))
+    print(string.format("Ghost=%s", tostring(msg.ghost)))
+    print(string.format("Name=%s", msg.name))
+end
+
+local function serializeEnvelopeMessage()
+    local msg = messages.new_envelope_message()
+    msg.code = 2  -- Join
+    msg.counter = 7
+    return bytesToHex(messages.serialize_envelope_message(msg))
+end
+
+local function deserializeEnvelopeMessage(hex)
+    local data = hexToBytes(hex)
+    local msg = messages.deserialize_envelope_message(data, 1)
+    print(string.format("Code=%d", msg.code))
+    print(string.format("Counter=%d", msg.counter))
+end
+
+local op = arg[1]
+local typ = arg[2]
+local hexInput = arg[3]
+
+local key = op .. ":" .. typ
+
+if key == "ser:Vector3" then
+    print(serializeVector3())
+elseif key == "deser:Vector3" then
+    deserializeVector3(hexInput)
+elseif key == "ser:MoveMessage" then
+    print(serializeMoveMessage())
+elseif key == "deser:MoveMessage" then
+    deserializeMoveMessage(hexInput)
+elseif key == "ser:EnvelopeMessage" then
+    print(serializeEnvelopeMessage())
+elseif key == "deser:EnvelopeMessage" then
+    deserializeEnvelopeMessage(hexInput)
+else
+    error("Unknown op:type " .. key)
+end
 `
