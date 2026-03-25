@@ -15,14 +15,14 @@ const (
 )
 
 type MoveMessage struct {
-	Position  Vector3    
-	Velocity  [3]float32 
-	Waypoints []Vector3  
+	Position  Vector3
+	Velocity  [3]float32
+	Waypoints []Vector3
 	PlayerID  uint32
-	Active  bool
-	Visible bool
-	Ghost   bool
-	Name    string
+	Active    bool
+	Visible   bool
+	Ghost     bool
+	Name      string
 }
 
 type SpawnMessage struct {

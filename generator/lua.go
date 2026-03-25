@@ -701,21 +701,6 @@ func luaDefaultValue(f parser.Field, enumNames map[string]struct{}) string {
 	return "nil"
 }
 
-func luaTypeName(f parser.Field, enumNames map[string]struct{}) string {
-	switch f.Kind {
-	case parser.KindPrimitive:
-		if luaIsEnumType(f, enumNames) {
-			return "number"
-		}
-		return "number"
-	case parser.KindNested:
-		return f.TypeName
-	case parser.KindFixedArray, parser.KindSlice:
-		return "table"
-	}
-	return "any"
-}
-
 func luaSerializeValueExpr(access string, f parser.Field, enumNames map[string]struct{}) string {
 	if !luaIsEnumType(f, enumNames) {
 		return access
@@ -765,7 +750,7 @@ func checkFieldLuaSupport(msgName string, f parser.Field) error {
 	switch f.Kind {
 	case parser.KindPrimitive:
 		if f.Primitive == parser.KindInt64 || f.Primitive == parser.KindUint64 {
-			return fmt.Errorf("Lua target does not support int64/uint64: field %s in message %s (LuaJIT/Defold uses double-precision floats which can only safely represent integers up to 2^53)", f.Name, msgName)
+			return fmt.Errorf("lua target does not support int64/uint64: field %s in message %s (LuaJIT/Defold uses double-precision floats which can only safely represent integers up to 2^53)", f.Name, msgName)
 		}
 	case parser.KindFixedArray, parser.KindSlice:
 		if f.Elem != nil {
