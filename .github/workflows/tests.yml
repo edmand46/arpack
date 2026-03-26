@@ -69,7 +69,8 @@ jobs:
 
     - name: Test code generation
       run: |
-        go run ./cmd/arpack -in testdata/sample.go -out-go /tmp/gen-go -out-ts /tmp/gen-ts -out-lua /tmp/gen-lua
+        go run ./cmd/arpack -in testdata/sample.go -out-go /tmp/gen-go -out-ts /tmp/gen-ts
+        go run ./cmd/arpack -in testdata/lua/sample.go -out-lua /tmp/gen-lua
         test -f /tmp/gen-go/sample_gen.go
         test -f /tmp/gen-ts/Sample.gen.ts
         test -f /tmp/gen-lua/sample_gen.lua
