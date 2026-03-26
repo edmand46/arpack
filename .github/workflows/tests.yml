@@ -35,12 +35,6 @@ jobs:
     - name: Run unit tests
       run: go test -v ./parser/... ./generator/...
 
-    - name: Install C compiler
-      run: sudo apt-get update && sudo apt-get install -y gcc
-
-    - name: Run C generator tests
-      run: go test -v -run C ./generator/...
-
     - name: Run benchmarks (short)
       run: go test -bench=. -benchtime=100ms -run=^$ ./benchmarks/...
 
@@ -73,20 +67,12 @@ jobs:
     - name: Build arpack CLI
       run: go build -v ./cmd/arpack
 
-    - name: Install C compiler
-      run: sudo apt-get update && sudo apt-get install -y gcc
-
     - name: Test code generation
       run: |
-        go run ./cmd/arpack -in testdata/sample.go -out-go /tmp/gen-go -out-ts /tmp/gen-ts -out-c /tmp/gen-c
+        go run ./cmd/arpack -in testdata/sample.go -out-go /tmp/gen-go -out-ts /tmp/gen-ts -out-lua /tmp/gen-lua
         test -f /tmp/gen-go/sample_gen.go
         test -f /tmp/gen-ts/Sample.gen.ts
-        test -f /tmp/gen-c/sample.gen.h
-        test -f /tmp/gen-c/sample.gen.c
-
-    - name: Compile generated C code
-      run: |
-        cc -std=c11 -Wall -Wextra -Wno-unused-function -c /tmp/gen-c/sample.gen.c -o /tmp/gen-c/sample.gen.o
+        test -f /tmp/gen-lua/sample_gen.lua
 
   e2e:
     runs-on: ubuntu-latest
@@ -107,9 +93,6 @@ jobs:
       uses: actions/setup-node@v4
       with:
         node-version: '20'
-
-    - name: Install C compiler
-      run: sudo apt-get update && sudo apt-get install -y gcc
 
     - name: Run E2E tests
       run: go test -v ./e2e/...

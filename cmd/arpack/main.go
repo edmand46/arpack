@@ -18,7 +18,6 @@ func main() {
 	outCS := flag.String("out-cs", "", "output directory for generated C# code")
 	outTS := flag.String("out-ts", "", "output directory for generated TypeScript code")
 	outLua := flag.String("out-lua", "", "output directory for generated Lua code")
-	outC := flag.String("out-c", "", "output directory for generated C code")
 	namespace := flag.String("cs-namespace", "Arpack.Messages", "C# namespace")
 	flag.Parse()
 
@@ -26,8 +25,8 @@ func main() {
 		log.Fatal("arpack: -in is required")
 	}
 
-	if *outGo == "" && *outCS == "" && *outTS == "" && *outLua == "" && *outC == "" {
-		log.Fatal("arpack: at least one of -out-go, -out-cs, -out-ts, -out-lua, or -out-c is required")
+	if *outGo == "" && *outCS == "" && *outTS == "" && *outLua == "" {
+		log.Fatal("arpack: at least one of -out-go, -out-cs, -out-ts, or -out-lua is required")
 	}
 
 	schema, err := parser.ParseSchemaFile(*in)
@@ -115,31 +114,6 @@ func main() {
 		}
 
 		fmt.Printf("arpack: wrote %s\n", outPath)
-	}
-
-	if *outC != "" {
-		snakeBase := toSnakeCase(baseName)
-		headerSrc, sourceSrc, err := generator.GenerateCSchema(schema, snakeBase)
-		if err != nil {
-			log.Fatalf("arpack: C generation error: %v", err)
-		}
-
-		headerPath := filepath.Join(*outC, snakeBase+".gen.h")
-		sourcePath := filepath.Join(*outC, snakeBase+".gen.c")
-
-		if err := os.MkdirAll(*outC, 0755); err != nil {
-			log.Fatalf("arpack: mkdir %s: %v", *outC, err)
-		}
-
-		if err := os.WriteFile(headerPath, headerSrc, 0644); err != nil {
-			log.Fatalf("arpack: write %s: %v", headerPath, err)
-		}
-		if err := os.WriteFile(sourcePath, sourceSrc, 0644); err != nil {
-			log.Fatalf("arpack: write %s: %v", sourcePath, err)
-		}
-
-		fmt.Printf("arpack: wrote %s\n", headerPath)
-		fmt.Printf("arpack: wrote %s\n", sourcePath)
 	}
 }
 
