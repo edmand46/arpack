@@ -67,6 +67,17 @@ arpack -in messages.go -out-lua ./defold/scripts/messages
 - TypeScript: `{Name}.gen.ts`
 - Lua: `{name}_gen.lua` (snake_case for Lua `require()` compatibility)
 
+## v1 Contract
+
+ArPack `v1` intentionally supports a narrow schema model:
+
+- Input is a single Go source file.
+- Message types must be defined in that same file.
+- External package types, pointers, and platform-dependent integer aliases (`int`, `uint`, `uintptr`) are not supported.
+- Wire format is stable within `v1.x` for unchanged schemas.
+
+This is a deliberate product boundary for predictable code generation and cross-language compatibility.
+
 ## Schema Definition
 
 Messages are defined as Go structs in a single `.go` file:
@@ -116,6 +127,8 @@ type MoveMessage struct {
 | `[N]T` | N × sizeof(T) | ✓ |
 | `[]T` | 2-byte length prefix + N × sizeof(T) | ✓ |
 
+**Note:** platform-dependent `int`, `uint`, and `uintptr` are not supported. Use explicit widths like `int32`, `uint32`, `int64`, or `uint64`.
+
 **Note:** `int64`/`uint64` are not supported in Lua target. LuaJIT (used by Defold) represents numbers as double-precision floats, which can only safely represent integers up to 2^53. Use `int32`/`uint32` instead.
 
 ### Float Quantization
@@ -135,6 +148,8 @@ Y float32 `pack:"min=0,max=1,bits=8"`        // 1 byte instead of 4
 
 Values are linearly mapped: `encoded = (value - min) / (max - min) * maxUint`.
 
+Quantized values must stay within the declared `[min, max]` range. Generated serializers fail fast on out-of-range or `NaN` inputs instead of silently truncating them.
+
 ## Generated Code
 
 ### Go
@@ -146,6 +161,8 @@ func (m *MoveMessage) Unmarshal(data []byte) (int, error)
 
 `Marshal` appends to the buffer and returns it. `Unmarshal` reads from the buffer and returns bytes consumed.
 
+**Failure behavior:** generated `Marshal` panics if a string/slice exceeds the `uint16` wire limit or if a quantized value is outside its declared range.
+
 ### C#
 
 ```csharp
@@ -154,6 +171,8 @@ public static unsafe int Deserialize(byte* buffer, out MoveMessage msg)
 ```
 
 Uses unsafe pointers for zero-copy serialization. Returns bytes written/consumed.
+
+**Failure behavior:** generated `Serialize` throws if a string/slice exceeds the `uint16` wire limit or if a quantized value is outside its declared range.
 
 ### TypeScript
 
@@ -176,6 +195,8 @@ export class MoveMessage {
 Uses native DataView API for browser-compatible serialization with zero dependencies. Returns bytes written/consumed.
 
 **Note:** TypeScript field names are converted to camelCase (e.g., `PlayerID` → `playerId`).
+
+**Failure behavior:** generated `serialize(...)` throws `RangeError` if a string/slice exceeds the `uint16` wire limit or if a quantized value is outside its declared range.
 
 ### Lua
 
@@ -201,6 +222,7 @@ Uses pure Lua with inline helper functions for byte manipulation. Compatible wit
 **Limitations:**
 - Lua target does not support `int64`/`uint64` types. Use `int32`/`uint32` instead. This is because LuaJIT represents numbers as double-precision floats, which can only safely represent integers up to 2^53.
 - Variable-length fields use `uint16` length prefixes, so `string` byte length and `[]T` element count must not exceed `65535`. Serialization raises an error if the limit is exceeded.
+- Quantized values must stay within the declared `[min, max]` range. Serialization raises a Lua error on out-of-range or `NaN` inputs.
 - Deserialization raises Lua errors on malformed or truncated input. If you need a recoverable boundary, wrap decode calls in `pcall(...)`.
 - Generated file uses snake_case naming (e.g., `messages_gen.lua`) for proper Lua `require()` resolution.
 
@@ -211,6 +233,24 @@ Uses pure Lua with inline helper functions for byte manipulation. Compatible wit
 - Variable-length fields (`string`, `[]T`) prefixed with `uint16` length
 - Booleans packed as bitfields (LSB first, up to 8 per byte)
 - Quantized floats stored as `uint8` or `uint16`
+
+## Compatibility Guarantees
+
+Within `v1.x`, the following are considered compatibility guarantees for a fixed schema:
+
+- Same field declaration order produces the same wire layout.
+- Go, C#, TypeScript, and Lua generators produce identical wire bytes for supported types.
+- `string` and `[]T` always use `uint16` length prefixes.
+- Consecutive `bool` fields are bit-packed in declaration order, least-significant bit first.
+- Enum fields use their declared underlying integer type on the wire.
+
+The following are breaking changes:
+
+- changing field order
+- changing a field type
+- changing quantization parameters
+- changing enum underlying types
+- changing how booleans are grouped or how lengths are encoded
 
 ## Benchmarks 
 
@@ -254,9 +294,20 @@ make gen-unity
 ## Running Tests
 
 ```bash
-# Unit tests
-go test ./parser/... ./generator/...
+# Full test suite
+make test
 
-# End-to-end cross-language tests
-go test ./e2e/...
+# Benchmarks
+go test ./benchmarks/... -bench=. -benchmem
 ```
+
+## Troubleshooting
+
+- `unknown type "..."`
+  The field type is not a supported primitive and is not defined in the same schema file.
+- `external package types not supported`
+  Copy the wire-facing type definition into the schema file instead of referencing another package.
+- `... exceeds uint16 limit`
+  A `string` encoded to more than `65535` bytes, or a slice contains more than `65535` elements.
+- `quantized value out of range`
+  The runtime value does not satisfy the declared `pack:"min=...,max=..."` bounds.

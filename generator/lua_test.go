@@ -281,8 +281,11 @@ func TestGenerateLua_QuantizedFloat(t *testing.T) {
 
 	luaStr := string(lua)
 
-	if !strings.Contains(luaStr, "math.floor(((msg.position - (-500)) / (500 - (-500))) * 65535)") {
+	if !strings.Contains(luaStr, "math.floor(((_quant_value_msg_position - (-500)) / (500 - (-500))) * 65535)") {
 		t.Error("Missing truncating quantization code for Lua")
+	}
+	if !strings.Contains(luaStr, `ensure_quant_range(msg.position, -500, 500, "Position")`) {
+		t.Error("Missing quantized range guard for Lua")
 	}
 	if strings.Contains(luaStr, "math.floor(((msg.position - (-500)) / (500 - (-500))) * 65535 + 0.5)") {
 		t.Error("Lua quantization should not round to nearest")
@@ -338,6 +341,7 @@ func TestLuaHelpersGenerated(t *testing.T) {
 		"buffer too short for u8",
 		"buffer too short for bool",
 		"local function ensure_u16_limit(n, context)",
+		"local function ensure_quant_range(value, min, max, context)",
 		"local function write_u8(n)",
 		"buffer too short for u16",
 		"local function write_u16_le(n)",
@@ -701,5 +705,63 @@ print(bytes_to_hex(messages.serialize_float_edges(msg)))
 	}
 	if lines[1] != "010000000100000000000000" {
 		t.Fatalf("subnormal roundtrip mismatch: %s", lines[1])
+	}
+}
+
+func TestGenerateLua_RuntimeQuantizedRangeGuard(t *testing.T) {
+	if _, err := exec.LookPath("luajit"); err != nil {
+		t.Skip("luajit not found")
+	}
+
+	schema := parser.Schema{
+		Messages: []parser.Message{
+			{
+				Name: "WithQuantized",
+				Fields: []parser.Field{
+					{
+						Name:      "Position",
+						Kind:      parser.KindPrimitive,
+						Primitive: parser.KindFloat32,
+						Quant:     &parser.QuantInfo{Min: -500, Max: 500, Bits: 16},
+					},
+				},
+			},
+		},
+	}
+
+	lua, err := GenerateLuaSchema(schema, "messages")
+	if err != nil {
+		t.Fatalf("GenerateLuaSchema failed: %v", err)
+	}
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "messages_gen.lua"), lua, 0o600); err != nil {
+		t.Fatalf("write module: %v", err)
+	}
+
+	script := `local messages = require("messages_gen")
+local msg = messages.new_with_quantized()
+msg.position = 501
+local ok, res = pcall(messages.serialize_with_quantized, msg)
+if ok then
+    print("OK")
+else
+    print(res)
+end
+`
+	if err := os.WriteFile(filepath.Join(dir, "check.lua"), []byte(script), 0o600); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+
+	cmd := exec.Command("luajit", "check.lua")
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("luajit failed: %v\n%s", err, out)
+	}
+
+	got := strings.TrimSpace(string(out))
+	if !strings.Contains(got, "quantized value out of range for Position") {
+		t.Fatalf("expected quantized range guard, got %q", got)
 	}
 }

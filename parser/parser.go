@@ -55,6 +55,8 @@ func parseASTFile(fset *token.FileSet, f *ast.File) (Schema, error) {
 
 	knownStructs := map[string]bool{}
 	namedPrimitives := map[string]PrimitiveKind{}
+	unsupportedNamedPrimitives := map[string]string{}
+	unresolvedNamedPrimitives := map[string]string{}
 	var enumOrder []string
 
 	for _, decl := range f.Decls {
@@ -73,14 +75,33 @@ func parseASTFile(fset *token.FileSet, f *ast.File) (Schema, error) {
 			case *ast.StructType:
 				knownStructs[typeSpec.Name.Name] = true
 			case *ast.Ident:
+				switch t.Name {
+				case "int", "uint", "uintptr":
+					unsupportedNamedPrimitives[typeSpec.Name.Name] = t.Name
+					continue
+				}
 				primKind, isPrimitive := goPrimitiveKind(t.Name)
 				if !isPrimitive {
+					unresolvedNamedPrimitives[typeSpec.Name.Name] = t.Name
 					continue
 				}
 				namedPrimitives[typeSpec.Name.Name] = primKind
 				if IsIntegralPrimitive(primKind) {
 					enumOrder = append(enumOrder, typeSpec.Name.Name)
 				}
+			}
+		}
+	}
+
+	for changed := true; changed; {
+		changed = false
+		for name, target := range unresolvedNamedPrimitives {
+			if _, ok := unsupportedNamedPrimitives[name]; ok {
+				continue
+			}
+			if baseType, ok := unsupportedNamedPrimitives[target]; ok {
+				unsupportedNamedPrimitives[name] = baseType
+				changed = true
 			}
 		}
 	}
@@ -119,7 +140,14 @@ func parseASTFile(fset *token.FileSet, f *ast.File) (Schema, error) {
 					continue
 				}
 
-				msg, err := parseStruct(pkgName, typeSpec.Name.Name, structType, knownStructs, namedPrimitives)
+				msg, err := parseStruct(
+					pkgName,
+					typeSpec.Name.Name,
+					structType,
+					knownStructs,
+					namedPrimitives,
+					unsupportedNamedPrimitives,
+				)
 				if err != nil {
 					return Schema{}, fmt.Errorf("struct %s: %w", typeSpec.Name.Name, err)
 				}
@@ -187,6 +215,7 @@ func parseStruct(
 	st *ast.StructType,
 	knownStructs map[string]bool,
 	namedPrimitives map[string]PrimitiveKind,
+	unsupportedNamedPrimitives map[string]string,
 ) (Message, error) {
 	msg := Message{PackageName: pkg, Name: name}
 
@@ -202,7 +231,14 @@ func parseStruct(
 		}
 
 		for _, fieldName := range astField.Names {
-			field, err := parseFieldType(fieldName.Name, astField.Type, rawTag, knownStructs, namedPrimitives)
+			field, err := parseFieldType(
+				fieldName.Name,
+				astField.Type,
+				rawTag,
+				knownStructs,
+				namedPrimitives,
+				unsupportedNamedPrimitives,
+			)
 			if err != nil {
 				return Message{}, fmt.Errorf("field %s: %w", fieldName.Name, err)
 			}
@@ -219,14 +255,22 @@ func parseFieldType(
 	rawTag string,
 	knownStructs map[string]bool,
 	namedPrimitives map[string]PrimitiveKind,
+	unsupportedNamedPrimitives map[string]string,
 ) (Field, error) {
 	switch t := expr.(type) {
 	case *ast.Ident:
-		return parsePrimitiveOrNested(name, t.Name, rawTag, knownStructs, namedPrimitives)
+		return parsePrimitiveOrNested(
+			name,
+			t.Name,
+			rawTag,
+			knownStructs,
+			namedPrimitives,
+			unsupportedNamedPrimitives,
+		)
 
 	case *ast.ArrayType:
 		if t.Len == nil {
-			elem, err := parseFieldType("", t.Elt, rawTag, knownStructs, namedPrimitives)
+			elem, err := parseFieldType("", t.Elt, rawTag, knownStructs, namedPrimitives, unsupportedNamedPrimitives)
 			if err != nil {
 				return Field{}, fmt.Errorf("slice element: %w", err)
 			}
@@ -243,7 +287,7 @@ func parseFieldType(
 			return Field{}, fmt.Errorf("array length: %w", err)
 		}
 
-		elem, err := parseFieldType("", t.Elt, rawTag, knownStructs, namedPrimitives)
+		elem, err := parseFieldType("", t.Elt, rawTag, knownStructs, namedPrimitives, unsupportedNamedPrimitives)
 		if err != nil {
 			return Field{}, fmt.Errorf("array element: %w", err)
 		}
@@ -271,9 +315,25 @@ func parsePrimitiveOrNested(
 	rawTag string,
 	knownStructs map[string]bool,
 	namedPrimitives map[string]PrimitiveKind,
+	unsupportedNamedPrimitives map[string]string,
 ) (Field, error) {
+	switch typeName {
+	case "int", "uint", "uintptr":
+		return Field{}, fmt.Errorf(
+			"platform-dependent type %q is not supported; use int32/int64, uint32/uint64, or fixed-size integer IDs instead",
+			typeName,
+		)
+	}
+
 	primKind, isPrimitive := goPrimitiveKind(typeName)
 	if !isPrimitive {
+		if baseType, ok := unsupportedNamedPrimitives[typeName]; ok {
+			return Field{}, fmt.Errorf(
+				"type %q aliases unsupported platform-dependent %q; use int32/int64, uint32/uint64, or fixed-size integer IDs instead",
+				typeName,
+				baseType,
+			)
+		}
 		if namedPrimitive, ok := namedPrimitives[typeName]; ok {
 			return buildPrimitiveField(name, typeName, namedPrimitive, rawTag)
 		}
@@ -385,7 +445,7 @@ func goPrimitiveKind(name string) (PrimitiveKind, bool) {
 		return KindInt8, true
 	case "int16":
 		return KindInt16, true
-	case "int32", "int":
+	case "int32":
 		return KindInt32, true
 	case "int64":
 		return KindInt64, true
@@ -393,7 +453,7 @@ func goPrimitiveKind(name string) (PrimitiveKind, bool) {
 		return KindUint8, true
 	case "uint16":
 		return KindUint16, true
-	case "uint32", "uint":
+	case "uint32":
 		return KindUint32, true
 	case "uint64":
 		return KindUint64, true

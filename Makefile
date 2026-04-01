@@ -1,8 +1,11 @@
 UNITY_ASSETS := benchmarks/unity/Assets
 
-.PHONY: bench-image generate bench size gen-unity
+.PHONY: test bench-image generate bench size gen-unity
 
 IMAGE := arpack-bench
+
+test:
+	go test ./...
 
 bench-image:
 	docker build -f Dockerfile.bench -t $(IMAGE) .

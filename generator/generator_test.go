@@ -254,8 +254,107 @@ func TestGenerateCSharp_Output(t *testing.T) {
 	if !strings.Contains(code, "public Opcode Code;") {
 		t.Error("EnvelopeMessage.Code should use generated enum type")
 	}
+	if !strings.Contains(code, "internal static class ArpackGenerated") {
+		t.Error("missing shared ArpackGenerated helper class")
+	}
+	if !strings.Contains(code, "EnsureU16Length") {
+		t.Error("missing uint16 length guard helper")
+	}
+	if !strings.Contains(code, "EnsureQuantizedRange") {
+		t.Error("missing quantized range guard helper")
+	}
 
 	t.Logf("Generated C# (%d bytes):\n%s", len(src), code)
+}
+
+func TestGenerateGo_RuntimeGuards(t *testing.T) {
+	schemaSrc := `package messages
+
+type Quantized struct {
+	Value float32 ` + "`" + `pack:"min=0,max=1,bits=8"` + "`" + `
+}
+
+type LengthLimited struct {
+	Name  string
+	Items []uint8
+}
+`
+
+	schema, err := parser.ParseSchemaSource(schemaSrc)
+	if err != nil {
+		t.Fatalf("ParseSchemaSource: %v", err)
+	}
+
+	src, err := GenerateGoSchema(schema, "messages")
+	if err != nil {
+		t.Fatalf("GenerateGoSchema: %v", err)
+	}
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "messages.go"), []byte(schemaSrc), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "messages_arpack.go"), src, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	runtimeTests := `package messages
+
+import (
+	"strings"
+	"testing"
+)
+
+func expectPanicContaining(t *testing.T, want string, fn func()) {
+	t.Helper()
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatalf("expected panic containing %q, got nil", want)
+		}
+		if !strings.Contains(r.(string), want) {
+			t.Fatalf("expected panic containing %q, got %v", want, r)
+		}
+	}()
+	fn()
+}
+
+func TestLengthGuard_String(t *testing.T) {
+	expectPanicContaining(t, "string length for Name exceeds uint16 limit", func() {
+		msg := LengthLimited{Name: strings.Repeat("a", 65536)}
+		_ = msg.Marshal(nil)
+	})
+}
+
+func TestLengthGuard_Slice(t *testing.T) {
+	expectPanicContaining(t, "slice length for Items exceeds uint16 limit", func() {
+		msg := LengthLimited{Items: make([]uint8, 65536)}
+		_ = msg.Marshal(nil)
+	})
+}
+
+func TestQuantizedRangeGuard(t *testing.T) {
+	expectPanicContaining(t, "quantized value out of range for Value", func() {
+		msg := Quantized{Value: 1.5}
+		_ = msg.Marshal(nil)
+	})
+}
+`
+	if err := os.WriteFile(filepath.Join(dir, "guards_test.go"), []byte(runtimeTests), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	goMod := "module messages\n\ngo 1.21\n"
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(goMod), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command("go", "test", "./...")
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("go test failed:\n%s", out)
+	}
 }
 
 func TestBoolPacking_GoCode(t *testing.T) {

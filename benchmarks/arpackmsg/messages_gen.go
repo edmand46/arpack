@@ -8,11 +8,27 @@ import (
 	"math"
 )
 
+func arpackEnsureUint16Length(length int, context string) uint16 {
+	if length > 65535 {
+		panic("arpack: " + context + " exceeds uint16 limit")
+	}
+	return uint16(length)
+}
+
+func arpackEnsureQuantizedRange(value float64, min float64, max float64, context string) {
+	if value != value || value < min || value > max {
+		panic("arpack: quantized value out of range for " + context)
+	}
+}
+
 func (m *Vector3) Marshal(buf []byte) []byte {
+	arpackEnsureQuantizedRange(float64(m.X), -500, 500, "X")
 	_qm_X := uint16((m.X - (-500)) / (500 - (-500)) * 65535)
 	buf = binary.LittleEndian.AppendUint16(buf, _qm_X)
+	arpackEnsureQuantizedRange(float64(m.Y), -500, 500, "Y")
 	_qm_Y := uint16((m.Y - (-500)) / (500 - (-500)) * 65535)
 	buf = binary.LittleEndian.AppendUint16(buf, _qm_Y)
+	arpackEnsureQuantizedRange(float64(m.Z), -500, 500, "Z")
 	_qm_Z := uint16((m.Z - (-500)) / (500 - (-500)) * 65535)
 	buf = binary.LittleEndian.AppendUint16(buf, _qm_Z)
 	return buf
@@ -49,7 +65,7 @@ func (m *MoveMessage) Marshal(buf []byte) []byte {
 	for _iVelocity := 0; _iVelocity < 3; _iVelocity++ {
 		buf = binary.LittleEndian.AppendUint32(buf, math.Float32bits(m.Velocity[_iVelocity]))
 	}
-	buf = binary.LittleEndian.AppendUint16(buf, uint16(len(m.Waypoints)))
+	buf = binary.LittleEndian.AppendUint16(buf, arpackEnsureUint16Length(len(m.Waypoints), "slice length for Waypoints"))
 	for _iWaypoints := range m.Waypoints {
 		buf = m.Waypoints[_iWaypoints].Marshal(buf)
 	}
@@ -65,7 +81,7 @@ func (m *MoveMessage) Marshal(buf []byte) []byte {
 		_boolByte4 |= 1 << 2
 	}
 	buf = append(buf, _boolByte4)
-	buf = binary.LittleEndian.AppendUint16(buf, uint16(len(m.Name)))
+	buf = binary.LittleEndian.AppendUint16(buf, arpackEnsureUint16Length(len(m.Name), "string length for Name"))
 	buf = append(buf, m.Name...)
 	return buf
 }
@@ -130,12 +146,12 @@ func (m *SpawnMessage) Marshal(buf []byte) []byte {
 	buf = binary.LittleEndian.AppendUint64(buf, m.EntityID)
 	buf = m.Position.Marshal(buf)
 	buf = binary.LittleEndian.AppendUint16(buf, uint16(m.Health))
-	buf = binary.LittleEndian.AppendUint16(buf, uint16(len(m.Tags)))
+	buf = binary.LittleEndian.AppendUint16(buf, arpackEnsureUint16Length(len(m.Tags), "slice length for Tags"))
 	for _iTags := range m.Tags {
-		buf = binary.LittleEndian.AppendUint16(buf, uint16(len(m.Tags[_iTags])))
+		buf = binary.LittleEndian.AppendUint16(buf, arpackEnsureUint16Length(len(m.Tags[_iTags]), "string length for Tags[_iTags]"))
 		buf = append(buf, m.Tags[_iTags]...)
 	}
-	buf = binary.LittleEndian.AppendUint16(buf, uint16(len(m.Data)))
+	buf = binary.LittleEndian.AppendUint16(buf, arpackEnsureUint16Length(len(m.Data), "slice length for Data"))
 	for _iData := range m.Data {
 		buf = append(buf, m.Data[_iData])
 	}

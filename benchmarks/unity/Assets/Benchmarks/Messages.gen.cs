@@ -7,6 +7,26 @@ using System.Text;
 
 namespace Arpack.Messages
 {
+    internal static class ArpackGenerated
+    {
+        internal static ushort EnsureU16Length(int length, string context)
+        {
+            if (length > 65535)
+            {
+                throw new InvalidOperationException("arpack: " + context + " exceeds uint16 limit");
+            }
+            return (ushort)length;
+        }
+
+        internal static void EnsureQuantizedRange(double value, double min, double max, string context)
+        {
+            if (double.IsNaN(value) || value < min || value > max)
+            {
+                throw new ArgumentOutOfRangeException(context, "arpack: quantized value out of range for " + context);
+            }
+        }
+    }
+
     public enum Opcode : ushort
     {
         Unknown = 0,
@@ -23,8 +43,11 @@ namespace Arpack.Messages
         public int Serialize(byte* buffer)
         {
             byte* ptr = buffer;
+            ArpackGenerated.EnsureQuantizedRange(X, -500, 500, "X");
             *(ushort*)ptr = (ushort)((X - (-500f)) / (500f - (-500f)) * 65535f); ptr += 2;
+            ArpackGenerated.EnsureQuantizedRange(Y, -500, 500, "Y");
             *(ushort*)ptr = (ushort)((Y - (-500f)) / (500f - (-500f)) * 65535f); ptr += 2;
+            ArpackGenerated.EnsureQuantizedRange(Z, -500, 500, "Z");
             *(ushort*)ptr = (ushort)((Z - (-500f)) / (500f - (-500f)) * 65535f); ptr += 2;
             return (int)(ptr - buffer);
         }
@@ -59,7 +82,7 @@ namespace Arpack.Messages
             {
                 *(float*)ptr = Velocity[_iVelocity]; ptr += 4;
             }
-            *(ushort*)ptr = (ushort)(Waypoints?.Length ?? 0); ptr += 2;
+            ushort _lenWaypoints = ArpackGenerated.EnsureU16Length(Waypoints?.Length ?? 0, "slice length for Waypoints"); *(ushort*)ptr = _lenWaypoints; ptr += 2;
             if (Waypoints != null)
             {
                 for (int _iWaypoints = 0; _iWaypoints < Waypoints.Length; _iWaypoints++)
@@ -74,7 +97,7 @@ namespace Arpack.Messages
             if (Ghost) _boolByte4 |= (byte)(1 << 2);
             *ptr = _boolByte4; ptr++;
             int _slenName = Name != null ? Encoding.UTF8.GetByteCount(Name) : 0;
-            *(ushort*)ptr = (ushort)_slenName; ptr += 2;
+            *(ushort*)ptr = ArpackGenerated.EnsureU16Length(_slenName, "string length for Name"); ptr += 2;
             if (Name != null && _slenName > 0)
             {
                 fixed (char* _charsName = Name)
@@ -128,13 +151,13 @@ namespace Arpack.Messages
             *(ulong*)ptr = EntityID; ptr += 8;
             ptr += Position.Serialize(ptr);
             *(short*)ptr = Health; ptr += 2;
-            *(ushort*)ptr = (ushort)(Tags?.Length ?? 0); ptr += 2;
+            ushort _lenTags = ArpackGenerated.EnsureU16Length(Tags?.Length ?? 0, "slice length for Tags"); *(ushort*)ptr = _lenTags; ptr += 2;
             if (Tags != null)
             {
                 for (int _iTags = 0; _iTags < Tags.Length; _iTags++)
                 {
                     int _slenTags__iTags_ = Tags[_iTags] != null ? Encoding.UTF8.GetByteCount(Tags[_iTags]) : 0;
-                    *(ushort*)ptr = (ushort)_slenTags__iTags_; ptr += 2;
+                    *(ushort*)ptr = ArpackGenerated.EnsureU16Length(_slenTags__iTags_, "string length for Tags[_iTags]"); ptr += 2;
                     if (Tags[_iTags] != null && _slenTags__iTags_ > 0)
                     {
                         fixed (char* _charsTags__iTags_ = Tags[_iTags])
@@ -145,7 +168,7 @@ namespace Arpack.Messages
                     ptr += _slenTags__iTags_;
                 }
             }
-            *(ushort*)ptr = (ushort)(Data?.Length ?? 0); ptr += 2;
+            ushort _lenData = ArpackGenerated.EnsureU16Length(Data?.Length ?? 0, "slice length for Data"); *(ushort*)ptr = _lenData; ptr += 2;
             if (Data != null)
             {
                 for (int _iData = 0; _iData < Data.Length; _iData++)

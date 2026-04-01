@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -264,5 +265,94 @@ type Msg struct {
 	_, err := ParseSource(src)
 	if err == nil {
 		t.Fatal("expected error for unknown nested type, got nil")
+	}
+}
+
+func TestUnsupportedPlatformDependentIntTypes(t *testing.T) {
+	cases := []struct {
+		name    string
+		src     string
+		wantErr string
+	}{
+		{
+			name: "direct int field",
+			src: `package p
+type Msg struct {
+	X int
+}
+`,
+			wantErr: `platform-dependent type "int" is not supported`,
+		},
+		{
+			name: "direct uint field",
+			src: `package p
+type Msg struct {
+	X uint
+}
+`,
+			wantErr: `platform-dependent type "uint" is not supported`,
+		},
+		{
+			name: "direct uintptr field",
+			src: `package p
+type Msg struct {
+	X uintptr
+}
+`,
+			wantErr: `platform-dependent type "uintptr" is not supported`,
+		},
+		{
+			name: "alias of int",
+			src: `package p
+type Counter int
+type Msg struct {
+	X Counter
+}
+`,
+			wantErr: `type "Counter" aliases unsupported platform-dependent "int"`,
+		},
+		{
+			name: "alias of uint",
+			src: `package p
+type Counter uint
+type Msg struct {
+	X Counter
+}
+`,
+			wantErr: `type "Counter" aliases unsupported platform-dependent "uint"`,
+		},
+		{
+			name: "alias of uintptr",
+			src: `package p
+type Handle uintptr
+type Msg struct {
+	X Handle
+}
+`,
+			wantErr: `type "Handle" aliases unsupported platform-dependent "uintptr"`,
+		},
+		{
+			name: "transitive alias of int",
+			src: `package p
+type Base int
+type Counter Base
+type Msg struct {
+	X Counter
+}
+`,
+			wantErr: `type "Counter" aliases unsupported platform-dependent "int"`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := ParseSource(tc.src)
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("expected error containing %q, got %v", tc.wantErr, err)
+			}
+		})
 	}
 }

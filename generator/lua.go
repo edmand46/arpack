@@ -76,6 +76,13 @@ func writeLuaHelpers(b *strings.Builder) {
 	b.WriteString("    return n\n")
 	b.WriteString("end\n\n")
 
+	b.WriteString("local function ensure_quant_range(value, min, max, context)\n")
+	b.WriteString("    if value ~= value or value < min or value > max then\n")
+	b.WriteString("        error(string.format(\"arpack: quantized value out of range for %s\", context))\n")
+	b.WriteString("    end\n")
+	b.WriteString("    return value\n")
+	b.WriteString("end\n\n")
+
 	b.WriteString("local function read_u8(data, offset)\n")
 	b.WriteString("    if offset > #data then error(\"arpack: buffer too short for u8\") end\n")
 	b.WriteString("    return string.byte(data, offset), 1\n")
@@ -506,8 +513,11 @@ func writeLuaSerializeQuant(b *strings.Builder, access string, f parser.Field, i
 	q := f.Quant
 	maxUint := q.MaxUint()
 	varName := "_q_" + sanitizeLuaVarName(access)
+	valueVar := "_quant_value_" + sanitizeLuaVarName(access)
+	fmt.Fprintf(b, "%slocal %s = ensure_quant_range(%s, %g, %g, %q)\n",
+		indent, valueVar, access, q.Min, q.Max, quantContext(f))
 	fmt.Fprintf(b, "%slocal %s = math.floor(((%s - (%g)) / (%g - (%g))) * %g)\n",
-		indent, varName, access, q.Min, q.Max, q.Min, maxUint)
+		indent, varName, valueVar, q.Min, q.Max, q.Min, maxUint)
 	if q.Bits == 8 {
 		fmt.Fprintf(b, "%spart_idx = part_idx + 1; parts[part_idx] = write_u8(%s)\n", indent, varName)
 	} else {

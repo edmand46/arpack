@@ -48,6 +48,16 @@ func TestE2E_CrossLanguage(t *testing.T) {
 		csDir := buildCSHarness(t, csSrc)
 
 		for _, tc := range cases {
+			t.Run("Wire/Go_EQ_CS/"+tc.name, func(t *testing.T) {
+				goHex := strings.TrimSpace(runHarness(t, goDir, "go", "ser", tc.typ, ""))
+				csHex := strings.TrimSpace(runHarness(t, csDir, "cs", "ser", tc.typ, ""))
+				if goHex != csHex {
+					t.Fatalf("wire drift between Go and C# for %s:\ngo=%s\ncs=%s", tc.typ, goHex, csHex)
+				}
+			})
+		}
+
+		for _, tc := range cases {
 			t.Run("Go_to_CS/"+tc.name, func(t *testing.T) {
 				hex := runHarness(t, goDir, "go", "ser", tc.typ, "")
 				out := runHarness(t, csDir, "cs", "deser", tc.typ, hex)
@@ -70,13 +80,15 @@ func TestE2E_CrossLanguage(t *testing.T) {
 		}
 		tsDir := buildTSHarness(t, tsSrc)
 
-		t.Run("QuantizedWire/Go_EQ_TS/Vector3", func(t *testing.T) {
-			goHex := strings.TrimSpace(runHarness(t, goDir, "go", "ser", "Vector3", ""))
-			tsHex := strings.TrimSpace(runHarness(t, tsDir, "ts", "ser", "Vector3", ""))
-			if goHex != tsHex {
-				t.Fatalf("quantized wire drift between Go and TS for Vector3:\ngo=%s\nts=%s", goHex, tsHex)
-			}
-		})
+		for _, tc := range cases {
+			t.Run("Wire/Go_EQ_TS/"+tc.name, func(t *testing.T) {
+				goHex := strings.TrimSpace(runHarness(t, goDir, "go", "ser", tc.typ, ""))
+				tsHex := strings.TrimSpace(runHarness(t, tsDir, "ts", "ser", tc.typ, ""))
+				if goHex != tsHex {
+					t.Fatalf("wire drift between Go and TS for %s:\ngo=%s\nts=%s", tc.typ, goHex, tsHex)
+				}
+			})
+		}
 
 		for _, tc := range cases {
 			t.Run("Go_to_TS/"+tc.name, func(t *testing.T) {
@@ -146,14 +158,6 @@ func TestE2E_CrossLanguage(t *testing.T) {
 		}
 		luaDir := buildLuaHarness(t, luaSrc)
 
-		t.Run("QuantizedWire/Go_EQ_Lua/Vector3", func(t *testing.T) {
-			goHex := strings.TrimSpace(runHarness(t, goDir, "go", "ser", "Vector3", ""))
-			luaHex := strings.TrimSpace(runHarness(t, luaDir, "lua", "ser", "Vector3", ""))
-			if goHex != luaHex {
-				t.Fatalf("quantized wire drift between Go and Lua for Vector3:\ngo=%s\nlua=%s", goHex, luaHex)
-			}
-		})
-
 		luaCases := []struct {
 			name    string
 			typ     string
@@ -162,6 +166,16 @@ func TestE2E_CrossLanguage(t *testing.T) {
 			{"Vector3", "Vector3", 0.02},
 			{"MoveMessage", "MoveMessage", 0.02},
 			{"EnvelopeMessage", "EnvelopeMessage", 0},
+		}
+
+		for _, tc := range luaCases {
+			t.Run("Wire/Go_EQ_Lua/"+tc.name, func(t *testing.T) {
+				goHex := strings.TrimSpace(runHarness(t, goDir, "go", "ser", tc.typ, ""))
+				luaHex := strings.TrimSpace(runHarness(t, luaDir, "lua", "ser", tc.typ, ""))
+				if goHex != luaHex {
+					t.Fatalf("wire drift between Go and Lua for %s:\ngo=%s\nlua=%s", tc.typ, goHex, luaHex)
+				}
+			})
 		}
 
 		for _, tc := range luaCases {
@@ -893,10 +907,10 @@ end
 local function serializeMoveMessage()
     local msg = messages.new_move_message()
     msg.position = messages.new_vector3()
-    msg.position.x = 10.0
-    msg.position.y = 20.0
-    msg.position.z = 30.0
-    msg.velocity = {1.0, 2.0, 3.0}
+    msg.position.x = 50.0
+    msg.position.y = -100.0
+    msg.position.z = 0.0
+    msg.velocity = {1.5, -2.5, 0.0}
     msg.waypoints = {}
     local wp = messages.new_vector3()
     wp.x = 10.0

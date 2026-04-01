@@ -101,10 +101,16 @@ func TestGenerateTypeScript_QuantizedFloats(t *testing.T) {
 	if !strings.Contains(code, "Math.trunc((this.q8 - (0)) / (100 - (0)) * 255)") {
 		t.Error("Missing 8-bit quantization code")
 	}
+	if !strings.Contains(code, `arpackEnsureQuantizedRange(this.q8, 0, 100, "Q8");`) {
+		t.Error("Missing 8-bit quantized range guard")
+	}
 
 	// Check 16-bit quantization (using camelCase field names)
 	if !strings.Contains(code, "Math.trunc((this.q16 - (-500)) / (500 - (-500)) * 65535)") {
 		t.Error("Missing 16-bit quantization code")
+	}
+	if !strings.Contains(code, `arpackEnsureQuantizedRange(this.q16, -500, 500, "Q16");`) {
+		t.Error("Missing 16-bit quantized range guard")
 	}
 
 	// Check deserialization with dequantization
@@ -286,8 +292,11 @@ func TestGenerateTypeScript_Slices(t *testing.T) {
 	}
 
 	// Check length prefix in serialize (using camelCase field name)
-	if !strings.Contains(code, "view.setUint16(pos, this.items.length, true);") {
-		t.Error("Missing slice length prefix in serialize")
+	if !strings.Contains(code, `arpackEnsureUint16Length(this.items.length, "slice length for Items")`) {
+		t.Error("Missing slice length guard in serialize")
+	}
+	if !strings.Contains(code, "view.setUint16(pos, _lenthis_items, true);") {
+		t.Error("Missing guarded slice length prefix in serialize")
 	}
 
 	// Check length reading in deserialize
@@ -385,17 +394,74 @@ func TestGenerateTypeScript_Strings(t *testing.T) {
 	code := string(src)
 
 	// Check TextEncoder usage
-	if !strings.Contains(code, "new TextEncoder().encode(") {
-		t.Error("Missing TextEncoder in serialize")
+	if !strings.Contains(code, "const arpackTextEncoder = new TextEncoder();") {
+		t.Error("Missing shared TextEncoder helper")
 	}
 
 	// Check length prefix
 	if !strings.Contains(code, "view.setUint16(pos, _slen") {
 		t.Error("Missing string length prefix in serialize")
 	}
+	if !strings.Contains(code, `arpackEnsureUint16Length(_slen`) {
+		t.Error("Missing string length guard in serialize")
+	}
 
 	// Check TextDecoder usage
-	if !strings.Contains(code, "new TextDecoder().decode(") {
-		t.Error("Missing TextDecoder in deserialize")
+	if !strings.Contains(code, "const arpackTextDecoder = new TextDecoder();") {
+		t.Error("Missing shared TextDecoder helper")
+	}
+	if !strings.Contains(code, "arpackTextDecoder.decode(") {
+		t.Error("Missing shared TextDecoder in deserialize")
+	}
+}
+
+func TestGenerateTypeScript_LengthAndRangeHelpers(t *testing.T) {
+	schema := parser.Schema{
+		Messages: []parser.Message{
+			{
+				PackageName: "test",
+				Name:        "LengthAndQuant",
+				Fields: []parser.Field{
+					{Name: "Name", Kind: parser.KindPrimitive, Primitive: parser.KindString},
+					{
+						Name: "Items",
+						Kind: parser.KindSlice,
+						Elem: &parser.Field{
+							Kind:      parser.KindPrimitive,
+							Primitive: parser.KindUint8,
+						},
+					},
+					{
+						Name:      "Ratio",
+						Kind:      parser.KindPrimitive,
+						Primitive: parser.KindFloat32,
+						Quant:     &parser.QuantInfo{Min: 0, Max: 1, Bits: 8},
+					},
+				},
+			},
+		},
+	}
+
+	src, err := GenerateTypeScriptSchema(schema, "Test")
+	if err != nil {
+		t.Fatalf("GenerateTypeScriptSchema: %v", err)
+	}
+
+	code := string(src)
+
+	if !strings.Contains(code, "function arpackEnsureUint16Length(length: number, context: string): number") {
+		t.Error("Missing uint16 length helper")
+	}
+	if !strings.Contains(code, "function arpackEnsureQuantizedRange(value: number, min: number, max: number, context: string): void") {
+		t.Error("Missing quantized range helper")
+	}
+	if !strings.Contains(code, `arpackEnsureUint16Length(this.items.length, "slice length for Items")`) {
+		t.Error("Missing slice length guard")
+	}
+	if !strings.Contains(code, `arpackEnsureUint16Length(_slen`) {
+		t.Error("Missing string length helper call")
+	}
+	if !strings.Contains(code, `arpackEnsureQuantizedRange(this.ratio, 0, 1, "Ratio");`) {
+		t.Error("Missing quantized range helper call")
 	}
 }
