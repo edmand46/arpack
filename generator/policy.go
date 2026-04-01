@@ -2,8 +2,6 @@ package generator
 
 import "github.com/edmand46/arpack/parser"
 
-const maxUint16Len = 65535
-
 func lengthContext(f parser.Field) string {
 	switch {
 	case f.Kind == parser.KindSlice:
