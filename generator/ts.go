@@ -8,12 +8,12 @@ import (
 )
 
 // GenerateTypeScript generates TypeScript code for the given messages
-func GenerateTypeScript(messages []parser.Message, namespace string) ([]byte, error) {
-	return GenerateTypeScriptSchema(parser.Schema{Messages: messages}, namespace)
+func GenerateTypeScript(messages []parser.Message) ([]byte, error) {
+	return GenerateTypeScriptSchema(parser.Schema{Messages: messages})
 }
 
 // GenerateTypeScriptSchema generates TypeScript code from a schema
-func GenerateTypeScriptSchema(schema parser.Schema, namespace string) ([]byte, error) {
+func GenerateTypeScriptSchema(schema parser.Schema) ([]byte, error) {
 	messages := schema.Messages
 	var b strings.Builder
 	needsLengthGuards := schemaNeedsLengthGuards(messages)
@@ -32,6 +32,13 @@ func GenerateTypeScriptSchema(schema parser.Schema, namespace string) ([]byte, e
 		b.WriteString("  return length;\n")
 		b.WriteString("}\n\n")
 	}
+
+	b.WriteString("function arpackEnsureReadable(view: DataView, offset: number, needed: number, context: string): void {\n")
+	b.WriteString("  if (offset < 0 || needed < 0 || offset + needed > view.byteLength) {\n")
+	b.WriteString("    const available = Math.max(0, view.byteLength - offset);\n")
+	b.WriteString("    throw new RangeError(\"arpack: buffer too short for \" + context + \": need \" + needed + \" bytes, have \" + available);\n")
+	b.WriteString("  }\n")
+	b.WriteString("}\n\n")
 
 	if needsQuantGuards {
 		b.WriteString("function arpackEnsureQuantizedRange(value: number, min: number, max: number, context: string): void {\n")
@@ -136,6 +143,7 @@ func writeTSBoolGroupSerialize(b *strings.Builder, recv string, bools []parser.F
 
 func writeTSBoolGroupDeserialize(b *strings.Builder, recv string, bools []parser.Field, groupIdx int, indent string) {
 	varName := fmt.Sprintf("_boolByte%d", groupIdx)
+	fmt.Fprintf(b, "%sarpackEnsureReadable(view, pos, 1, %q);\n", indent, "bool group")
 	fmt.Fprintf(b, "%sconst %s = view.getUint8(pos);\n", indent, varName)
 	fmt.Fprintf(b, "%spos += 1;\n", indent)
 	for bit, f := range bools {
@@ -252,7 +260,7 @@ func writeTSSerializePrimitiveElement(b *strings.Builder, access string, f parse
 			indent, guardVar, lenVar, lengthContext(f))
 		fmt.Fprintf(b, "%sview.setUint16(pos, %s, true);\n", indent, guardVar)
 		fmt.Fprintf(b, "%spos += 2;\n", indent)
-		fmt.Fprintf(b, "%snew Uint8Array(view.buffer, pos, %s.length).set(%s);\n", indent, lenVar, lenVar)
+		fmt.Fprintf(b, "%snew Uint8Array(view.buffer, view.byteOffset+pos, %s.length).set(%s);\n", indent, lenVar, lenVar)
 		fmt.Fprintf(b, "%spos += %s.length;\n", indent, lenVar)
 	}
 	return nil
@@ -306,7 +314,7 @@ func writeTSSerializePrimitive(b *strings.Builder, access string, f parser.Field
 			indent, guardVar, lenVar, lengthContext(f))
 		fmt.Fprintf(b, "%sview.setUint16(pos, %s, true);\n", indent, guardVar)
 		fmt.Fprintf(b, "%spos += 2;\n", indent)
-		fmt.Fprintf(b, "%snew Uint8Array(view.buffer, pos, %s.length).set(%s);\n", indent, lenVar, lenVar)
+		fmt.Fprintf(b, "%snew Uint8Array(view.buffer, view.byteOffset+pos, %s.length).set(%s);\n", indent, lenVar, lenVar)
 		fmt.Fprintf(b, "%spos += %s.length;\n", indent, lenVar)
 	}
 	return nil
@@ -314,18 +322,14 @@ func writeTSSerializePrimitive(b *strings.Builder, access string, f parser.Field
 
 func writeTSSerializeQuant(b *strings.Builder, access string, f parser.Field, indent string) error {
 	q := f.Quant
-	maxUint := q.MaxUint()
 	varName := "_q" + sanitizeVarName(access)
 	fmt.Fprintf(b, "%sarpackEnsureQuantizedRange(%s, %g, %g, %q);\n",
 		indent, access, q.Min, q.Max, quantContext(f))
+	fmt.Fprintf(b, "%sconst %s = %s;\n", indent, varName, quantizeExpr("ts", access, q, q.Bits))
 	if q.Bits == 8 {
-		fmt.Fprintf(b, "%sconst %s = Math.trunc((%s - (%g)) / (%g - (%g)) * %g);\n",
-			indent, varName, access, q.Min, q.Max, q.Min, maxUint)
 		fmt.Fprintf(b, "%sview.setUint8(pos, %s);\n", indent, varName)
 		fmt.Fprintf(b, "%spos += 1;\n", indent)
 	} else {
-		fmt.Fprintf(b, "%sconst %s = Math.trunc((%s - (%g)) / (%g - (%g)) * %g);\n",
-			indent, varName, access, q.Min, q.Max, q.Min, maxUint)
 		fmt.Fprintf(b, "%sview.setUint16(pos, %s, true);\n", indent, varName)
 		fmt.Fprintf(b, "%spos += 2;\n", indent)
 	}
@@ -334,18 +338,14 @@ func writeTSSerializeQuant(b *strings.Builder, access string, f parser.Field, in
 
 func writeTSSerializeQuantElement(b *strings.Builder, access string, f parser.Field, indent string) error {
 	q := f.Quant
-	maxUint := q.MaxUint()
 	varName := "_q" + sanitizeVarName(access)
 	fmt.Fprintf(b, "%sarpackEnsureQuantizedRange(%s, %g, %g, %q);\n",
 		indent, access, q.Min, q.Max, quantContext(f))
+	fmt.Fprintf(b, "%sconst %s = %s;\n", indent, varName, quantizeExpr("ts", access, q, q.Bits))
 	if q.Bits == 8 {
-		fmt.Fprintf(b, "%sconst %s = Math.trunc((%s - (%g)) / (%g - (%g)) * %g);\n",
-			indent, varName, access, q.Min, q.Max, q.Min, maxUint)
 		fmt.Fprintf(b, "%sview.setUint8(pos, %s);\n", indent, varName)
 		fmt.Fprintf(b, "%spos += 1;\n", indent)
 	} else {
-		fmt.Fprintf(b, "%sconst %s = Math.trunc((%s - (%g)) / (%g - (%g)) * %g);\n",
-			indent, varName, access, q.Min, q.Max, q.Min, maxUint)
 		fmt.Fprintf(b, "%sview.setUint16(pos, %s, true);\n", indent, varName)
 		fmt.Fprintf(b, "%spos += 2;\n", indent)
 	}
@@ -358,9 +358,10 @@ func writeTSDeserializeField(b *strings.Builder, recv string, f parser.Field, in
 	case parser.KindPrimitive:
 		return writeTSDeserializePrimitive(b, access, f, indent, enumNames)
 	case parser.KindNested:
-		fmt.Fprintf(b, "%sconst [_%s, _n%s] = %s.deserialize(view, pos);\n", indent, f.Name, f.Name, f.TypeName)
-		fmt.Fprintf(b, "%s%s = _%s;\n", indent, access, f.Name)
-		fmt.Fprintf(b, "%spos += _n%s;\n", indent, f.Name)
+		sanName := sanitizeVarName(f.Name)
+		fmt.Fprintf(b, "%sconst [_dv%s, _dn%s] = %s.deserialize(view, pos);\n", indent, sanName, sanName, f.TypeName)
+		fmt.Fprintf(b, "%s%s = _dv%s;\n", indent, access, sanName)
+		fmt.Fprintf(b, "%spos += _dn%s;\n", indent, sanName)
 	case parser.KindFixedArray:
 		iVar := "_i" + f.Name
 		fmt.Fprintf(b, "%s%s = new Array(%d);\n", indent, access, f.FixedLen)
@@ -382,6 +383,7 @@ func writeTSDeserializeField(b *strings.Builder, recv string, f parser.Field, in
 		fmt.Fprintf(b, "%s}\n", indent)
 	case parser.KindSlice:
 		lenVar := "_len" + f.Name
+		fmt.Fprintf(b, "%sarpackEnsureReadable(view, pos, 2, %q);\n", indent, "slice length for "+f.Name)
 		fmt.Fprintf(b, "%sconst %s = view.getUint16(pos, true);\n", indent, lenVar)
 		fmt.Fprintf(b, "%spos += 2;\n", indent)
 		fmt.Fprintf(b, "%s%s = new Array(%s);\n", indent, access, lenVar)
@@ -425,54 +427,67 @@ func writeTSDeserializePrimitiveElement(b *strings.Builder, access string, f par
 
 	switch f.Primitive {
 	case parser.KindFloat32:
+		fmt.Fprintf(b, "%sarpackEnsureReadable(view, pos, 4, %q);\n", indent, "float32")
 		expr := "view.getFloat32(pos, true)"
 		fmt.Fprintf(b, "%s%s = %s;\n", indent, access, tsDeserializeValueExpr(expr, f, enumNames))
 		fmt.Fprintf(b, "%spos += 4;\n", indent)
 	case parser.KindFloat64:
+		fmt.Fprintf(b, "%sarpackEnsureReadable(view, pos, 8, %q);\n", indent, "float64")
 		expr := "view.getFloat64(pos, true)"
 		fmt.Fprintf(b, "%s%s = %s;\n", indent, access, tsDeserializeValueExpr(expr, f, enumNames))
 		fmt.Fprintf(b, "%spos += 8;\n", indent)
 	case parser.KindInt8:
+		fmt.Fprintf(b, "%sarpackEnsureReadable(view, pos, 1, %q);\n", indent, "int8")
 		expr := "view.getInt8(pos)"
 		fmt.Fprintf(b, "%s%s = %s;\n", indent, access, tsDeserializeValueExpr(expr, f, enumNames))
 		fmt.Fprintf(b, "%spos += 1;\n", indent)
 	case parser.KindUint8:
+		fmt.Fprintf(b, "%sarpackEnsureReadable(view, pos, 1, %q);\n", indent, "uint8")
 		expr := "view.getUint8(pos)"
 		fmt.Fprintf(b, "%s%s = %s;\n", indent, access, tsDeserializeValueExpr(expr, f, enumNames))
 		fmt.Fprintf(b, "%spos += 1;\n", indent)
 	case parser.KindBool:
+		fmt.Fprintf(b, "%sarpackEnsureReadable(view, pos, 1, %q);\n", indent, "bool")
 		expr := "view.getUint8(pos) !== 0"
 		fmt.Fprintf(b, "%s%s = %s;\n", indent, access, tsDeserializeValueExpr(expr, f, enumNames))
 		fmt.Fprintf(b, "%spos += 1;\n", indent)
 	case parser.KindInt16:
+		fmt.Fprintf(b, "%sarpackEnsureReadable(view, pos, 2, %q);\n", indent, "int16")
 		expr := "view.getInt16(pos, true)"
 		fmt.Fprintf(b, "%s%s = %s;\n", indent, access, tsDeserializeValueExpr(expr, f, enumNames))
 		fmt.Fprintf(b, "%spos += 2;\n", indent)
 	case parser.KindUint16:
+		fmt.Fprintf(b, "%sarpackEnsureReadable(view, pos, 2, %q);\n", indent, "uint16")
 		expr := "view.getUint16(pos, true)"
 		fmt.Fprintf(b, "%s%s = %s;\n", indent, access, tsDeserializeValueExpr(expr, f, enumNames))
 		fmt.Fprintf(b, "%spos += 2;\n", indent)
 	case parser.KindInt32:
+		fmt.Fprintf(b, "%sarpackEnsureReadable(view, pos, 4, %q);\n", indent, "int32")
 		expr := "view.getInt32(pos, true)"
 		fmt.Fprintf(b, "%s%s = %s;\n", indent, access, tsDeserializeValueExpr(expr, f, enumNames))
 		fmt.Fprintf(b, "%spos += 4;\n", indent)
 	case parser.KindUint32:
+		fmt.Fprintf(b, "%sarpackEnsureReadable(view, pos, 4, %q);\n", indent, "uint32")
 		expr := "view.getUint32(pos, true)"
 		fmt.Fprintf(b, "%s%s = %s;\n", indent, access, tsDeserializeValueExpr(expr, f, enumNames))
 		fmt.Fprintf(b, "%spos += 4;\n", indent)
 	case parser.KindInt64:
+		fmt.Fprintf(b, "%sarpackEnsureReadable(view, pos, 8, %q);\n", indent, "int64")
 		expr := "view.getBigInt64(pos, true)"
 		fmt.Fprintf(b, "%s%s = %s;\n", indent, access, tsDeserializeValueExpr(expr, f, enumNames))
 		fmt.Fprintf(b, "%spos += 8;\n", indent)
 	case parser.KindUint64:
+		fmt.Fprintf(b, "%sarpackEnsureReadable(view, pos, 8, %q);\n", indent, "uint64")
 		expr := "view.getBigUint64(pos, true)"
 		fmt.Fprintf(b, "%s%s = %s;\n", indent, access, tsDeserializeValueExpr(expr, f, enumNames))
 		fmt.Fprintf(b, "%spos += 8;\n", indent)
 	case parser.KindString:
 		lenVar := "_slen" + sanitizeVarName(access)
+		fmt.Fprintf(b, "%sarpackEnsureReadable(view, pos, 2, %q);\n", indent, "string length for "+f.Name)
 		fmt.Fprintf(b, "%sconst %s = view.getUint16(pos, true);\n", indent, lenVar)
 		fmt.Fprintf(b, "%spos += 2;\n", indent)
-		expr := fmt.Sprintf("arpackTextDecoder.decode(new Uint8Array(view.buffer, pos, %s))", lenVar)
+		fmt.Fprintf(b, "%sarpackEnsureReadable(view, pos, %s, %q);\n", indent, lenVar, "string data for "+f.Name)
+		expr := fmt.Sprintf("arpackTextDecoder.decode(new Uint8Array(view.buffer, view.byteOffset+pos, %s))", lenVar)
 		fmt.Fprintf(b, "%s%s = %s;\n", indent, access, tsDeserializeValueExpr(expr, f, enumNames))
 		fmt.Fprintf(b, "%spos += %s;\n", indent, lenVar)
 	}
@@ -486,54 +501,67 @@ func writeTSDeserializePrimitive(b *strings.Builder, access string, f parser.Fie
 
 	switch f.Primitive {
 	case parser.KindFloat32:
+		fmt.Fprintf(b, "%sarpackEnsureReadable(view, pos, 4, %q);\n", indent, "float32")
 		expr := "view.getFloat32(pos, true)"
 		fmt.Fprintf(b, "%s%s = %s;\n", indent, access, tsDeserializeValueExpr(expr, f, enumNames))
 		fmt.Fprintf(b, "%spos += 4;\n", indent)
 	case parser.KindFloat64:
+		fmt.Fprintf(b, "%sarpackEnsureReadable(view, pos, 8, %q);\n", indent, "float64")
 		expr := "view.getFloat64(pos, true)"
 		fmt.Fprintf(b, "%s%s = %s;\n", indent, access, tsDeserializeValueExpr(expr, f, enumNames))
 		fmt.Fprintf(b, "%spos += 8;\n", indent)
 	case parser.KindInt8:
+		fmt.Fprintf(b, "%sarpackEnsureReadable(view, pos, 1, %q);\n", indent, "int8")
 		expr := "view.getInt8(pos)"
 		fmt.Fprintf(b, "%s%s = %s;\n", indent, access, tsDeserializeValueExpr(expr, f, enumNames))
 		fmt.Fprintf(b, "%spos += 1;\n", indent)
 	case parser.KindUint8:
+		fmt.Fprintf(b, "%sarpackEnsureReadable(view, pos, 1, %q);\n", indent, "uint8")
 		expr := "view.getUint8(pos)"
 		fmt.Fprintf(b, "%s%s = %s;\n", indent, access, tsDeserializeValueExpr(expr, f, enumNames))
 		fmt.Fprintf(b, "%spos += 1;\n", indent)
 	case parser.KindBool:
+		fmt.Fprintf(b, "%sarpackEnsureReadable(view, pos, 1, %q);\n", indent, "bool")
 		expr := "view.getUint8(pos) !== 0"
 		fmt.Fprintf(b, "%s%s = %s;\n", indent, access, tsDeserializeValueExpr(expr, f, enumNames))
 		fmt.Fprintf(b, "%spos += 1;\n", indent)
 	case parser.KindInt16:
+		fmt.Fprintf(b, "%sarpackEnsureReadable(view, pos, 2, %q);\n", indent, "int16")
 		expr := "view.getInt16(pos, true)"
 		fmt.Fprintf(b, "%s%s = %s;\n", indent, access, tsDeserializeValueExpr(expr, f, enumNames))
 		fmt.Fprintf(b, "%spos += 2;\n", indent)
 	case parser.KindUint16:
+		fmt.Fprintf(b, "%sarpackEnsureReadable(view, pos, 2, %q);\n", indent, "uint16")
 		expr := "view.getUint16(pos, true)"
 		fmt.Fprintf(b, "%s%s = %s;\n", indent, access, tsDeserializeValueExpr(expr, f, enumNames))
 		fmt.Fprintf(b, "%spos += 2;\n", indent)
 	case parser.KindInt32:
+		fmt.Fprintf(b, "%sarpackEnsureReadable(view, pos, 4, %q);\n", indent, "int32")
 		expr := "view.getInt32(pos, true)"
 		fmt.Fprintf(b, "%s%s = %s;\n", indent, access, tsDeserializeValueExpr(expr, f, enumNames))
 		fmt.Fprintf(b, "%spos += 4;\n", indent)
 	case parser.KindUint32:
+		fmt.Fprintf(b, "%sarpackEnsureReadable(view, pos, 4, %q);\n", indent, "uint32")
 		expr := "view.getUint32(pos, true)"
 		fmt.Fprintf(b, "%s%s = %s;\n", indent, access, tsDeserializeValueExpr(expr, f, enumNames))
 		fmt.Fprintf(b, "%spos += 4;\n", indent)
 	case parser.KindInt64:
+		fmt.Fprintf(b, "%sarpackEnsureReadable(view, pos, 8, %q);\n", indent, "int64")
 		expr := "view.getBigInt64(pos, true)"
 		fmt.Fprintf(b, "%s%s = %s;\n", indent, access, tsDeserializeValueExpr(expr, f, enumNames))
 		fmt.Fprintf(b, "%spos += 8;\n", indent)
 	case parser.KindUint64:
+		fmt.Fprintf(b, "%sarpackEnsureReadable(view, pos, 8, %q);\n", indent, "uint64")
 		expr := "view.getBigUint64(pos, true)"
 		fmt.Fprintf(b, "%s%s = %s;\n", indent, access, tsDeserializeValueExpr(expr, f, enumNames))
 		fmt.Fprintf(b, "%spos += 8;\n", indent)
 	case parser.KindString:
 		lenVar := "_slen" + sanitizeVarName(access)
+		fmt.Fprintf(b, "%sarpackEnsureReadable(view, pos, 2, %q);\n", indent, "string length for "+f.Name)
 		fmt.Fprintf(b, "%sconst %s = view.getUint16(pos, true);\n", indent, lenVar)
 		fmt.Fprintf(b, "%spos += 2;\n", indent)
-		expr := fmt.Sprintf("arpackTextDecoder.decode(new Uint8Array(view.buffer, pos, %s))", lenVar)
+		fmt.Fprintf(b, "%sarpackEnsureReadable(view, pos, %s, %q);\n", indent, lenVar, "string data for "+f.Name)
+		expr := fmt.Sprintf("arpackTextDecoder.decode(new Uint8Array(view.buffer, view.byteOffset+pos, %s))", lenVar)
 		fmt.Fprintf(b, "%s%s = %s;\n", indent, access, tsDeserializeValueExpr(expr, f, enumNames))
 		fmt.Fprintf(b, "%spos += %s;\n", indent, lenVar)
 	}
@@ -542,37 +570,35 @@ func writeTSDeserializePrimitive(b *strings.Builder, access string, f parser.Fie
 
 func writeTSDeserializeQuant(b *strings.Builder, access string, f parser.Field, indent string) error {
 	q := f.Quant
-	maxUint := q.MaxUint()
 	varName := "_q" + sanitizeVarName(access)
 	if q.Bits == 8 {
+		fmt.Fprintf(b, "%sarpackEnsureReadable(view, pos, 1, %q);\n", indent, "quantized value for "+f.Name)
 		fmt.Fprintf(b, "%sconst %s = view.getUint8(pos);\n", indent, varName)
 		fmt.Fprintf(b, "%spos += 1;\n", indent)
-		expr := fmt.Sprintf("%s / %g * (%g - (%g)) + (%g)", varName, maxUint, q.Max, q.Min, q.Min)
-		fmt.Fprintf(b, "%s%s = %s;\n", indent, access, tsDeserializeValueExpr(expr, f, nil))
 	} else {
+		fmt.Fprintf(b, "%sarpackEnsureReadable(view, pos, 2, %q);\n", indent, "quantized value for "+f.Name)
 		fmt.Fprintf(b, "%sconst %s = view.getUint16(pos, true);\n", indent, varName)
 		fmt.Fprintf(b, "%spos += 2;\n", indent)
-		expr := fmt.Sprintf("%s / %g * (%g - (%g)) + (%g)", varName, maxUint, q.Max, q.Min, q.Min)
-		fmt.Fprintf(b, "%s%s = %s;\n", indent, access, tsDeserializeValueExpr(expr, f, nil))
 	}
+	expr := dequantizeExpr("ts", varName, q, f.Primitive)
+	fmt.Fprintf(b, "%s%s = %s;\n", indent, access, tsDeserializeValueExpr(expr, f, nil))
 	return nil
 }
 
 func writeTSDeserializeQuantElement(b *strings.Builder, access string, f parser.Field, indent string) error {
 	q := f.Quant
-	maxUint := q.MaxUint()
 	varName := "_q" + sanitizeVarName(access)
 	if q.Bits == 8 {
+		fmt.Fprintf(b, "%sarpackEnsureReadable(view, pos, 1, %q);\n", indent, "quantized value for "+f.Name)
 		fmt.Fprintf(b, "%sconst %s = view.getUint8(pos);\n", indent, varName)
 		fmt.Fprintf(b, "%spos += 1;\n", indent)
-		expr := fmt.Sprintf("%s / %g * (%g - (%g)) + (%g)", varName, maxUint, q.Max, q.Min, q.Min)
-		fmt.Fprintf(b, "%s%s = %s;\n", indent, access, tsDeserializeValueExpr(expr, f, nil))
 	} else {
+		fmt.Fprintf(b, "%sarpackEnsureReadable(view, pos, 2, %q);\n", indent, "quantized value for "+f.Name)
 		fmt.Fprintf(b, "%sconst %s = view.getUint16(pos, true);\n", indent, varName)
 		fmt.Fprintf(b, "%spos += 2;\n", indent)
-		expr := fmt.Sprintf("%s / %g * (%g - (%g)) + (%g)", varName, maxUint, q.Max, q.Min, q.Min)
-		fmt.Fprintf(b, "%s%s = %s;\n", indent, access, tsDeserializeValueExpr(expr, f, nil))
 	}
+	expr := dequantizeExpr("ts", varName, q, f.Primitive)
+	fmt.Fprintf(b, "%s%s = %s;\n", indent, access, tsDeserializeValueExpr(expr, f, nil))
 	return nil
 }
 

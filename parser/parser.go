@@ -221,7 +221,7 @@ func parseStruct(
 
 	for _, astField := range st.Fields.List {
 		if len(astField.Names) == 0 {
-			continue
+			return Message{}, fmt.Errorf("embedded fields not supported")
 		}
 
 		var rawTag string
@@ -246,6 +246,7 @@ func parseStruct(
 			msg.Fields = append(msg.Fields, field)
 		}
 	}
+
 	return msg, nil
 }
 
@@ -274,7 +275,9 @@ func parseFieldType(
 			if err != nil {
 				return Field{}, fmt.Errorf("slice element: %w", err)
 			}
-
+			if elem.Kind == KindSlice || elem.Kind == KindFixedArray {
+				return Field{}, fmt.Errorf("nested arrays/slices not supported (v1 limitation)")
+			}
 			return Field{
 				Name: name,
 				Kind: KindSlice,
@@ -291,7 +294,9 @@ func parseFieldType(
 		if err != nil {
 			return Field{}, fmt.Errorf("array element: %w", err)
 		}
-
+		if elem.Kind == KindSlice || elem.Kind == KindFixedArray {
+			return Field{}, fmt.Errorf("nested arrays/slices not supported (v1 limitation)")
+		}
 		return Field{
 			Name:     name,
 			Kind:     KindFixedArray,
@@ -362,6 +367,7 @@ func buildPrimitiveField(name, namedType string, primKind PrimitiveKind, rawTag 
 	if rawTag != "" {
 		if primKind != KindFloat32 && primKind != KindFloat64 {
 			typeLabel := field.GoTypeName()
+
 			return Field{}, fmt.Errorf("arpack tag can only be applied to float32/float64, got %s", typeLabel)
 		}
 		quant, err := parseQuantTag(rawTag)

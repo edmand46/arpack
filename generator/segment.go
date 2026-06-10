@@ -34,18 +34,6 @@ func segmentFields(fields []parser.Field) []segment {
 }
 
 func packedMinWireSize(fields []parser.Field) int {
-	total := 0
-	for _, seg := range segmentFields(fields) {
-		if seg.single != nil {
-			s := seg.single.WireSize()
-			if s == -1 {
-				total += 2
-			} else {
-				total += s
-			}
-		} else {
-			total += 1
-		}
-	}
-	return total
+	m := parser.Message{Fields: fields}
+	return m.MinWireSize()
 }

@@ -32,6 +32,11 @@ jobs:
     - name: Download dependencies
       run: go mod download
 
+    - name: Install LuaJIT
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq luajit
+
     - name: Run full Go test suite
       run: make test
 
@@ -94,6 +99,10 @@ jobs:
       uses: actions/setup-node@v4
       with:
         node-version: '20'
+    - name: Install LuaJIT
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq luajit
 
     - name: Run E2E tests
       run: go test -v ./e2e/...

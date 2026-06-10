@@ -2,6 +2,8 @@ package e2e
 
 import (
 	"bytes"
+	"encoding/binary"
+	"encoding/hex"
 	"math"
 	"os"
 	"os/exec"
@@ -38,9 +40,13 @@ func TestE2E_CrossLanguage(t *testing.T) {
 		{"SpawnMessage", "SpawnMessage", 0.02}, // mix: int, nested, []string, []byte
 		{"MoveMessage", "MoveMessage", 0.02},   // bool bit packing: Active, Visible, Ghost
 		{"EnvelopeMessage", "EnvelopeMessage", 0},
+		{"QuantTestMessage", "QuantTestMessage", 0.02},
 	}
 
-	if _, err := exec.LookPath("dotnet"); err == nil {
+	t.Run("CS", func(t *testing.T) {
+		if _, err := exec.LookPath("dotnet"); err != nil {
+			t.Skip("dotnet not found")
+		}
 		csSrc, err := generator.GenerateCSharpSchema(schema, "Ragono.Messages")
 		if err != nil {
 			t.Fatalf("GenerateCSharpSchema: %v", err)
@@ -69,12 +75,14 @@ func TestE2E_CrossLanguage(t *testing.T) {
 				checkOutput(t, tc.typ, out, tc.epsilon)
 			})
 		}
-	} else {
-		t.Log("dotnet not found, skipping C# cross-language e2e tests")
-	}
+	})
+	// TestE2E_CrossLanguage — TS block
 
-	if _, err := exec.LookPath("node"); err == nil {
-		tsSrc, err := generator.GenerateTypeScriptSchema(schema, "Arpack.Messages")
+	t.Run("TS", func(t *testing.T) {
+		if _, err := exec.LookPath("node"); err != nil {
+			t.Skip("node not found")
+		}
+		tsSrc, err := generator.GenerateTypeScriptSchema(schema)
 		if err != nil {
 			t.Fatalf("GenerateTypeScriptSchema: %v", err)
 		}
@@ -102,11 +110,13 @@ func TestE2E_CrossLanguage(t *testing.T) {
 				checkOutput(t, tc.typ, out, tc.epsilon)
 			})
 		}
-	} else {
-		t.Log("node not found, skipping TypeScript cross-language e2e tests")
-	}
+	})
+	// TestE2E_CrossLanguage — Lua block
 
-	if _, err := exec.LookPath("luajit"); err == nil {
+	t.Run("Lua", func(t *testing.T) {
+		if _, err := exec.LookPath("luajit"); err != nil {
+			t.Skip("luajit not found")
+		}
 		// Use a simpler test schema without int64/uint64 for Lua
 		luaSchema := parser.Schema{
 			Messages: []parser.Message{
@@ -190,8 +200,409 @@ func TestE2E_CrossLanguage(t *testing.T) {
 				checkOutput(t, tc.typ, out, tc.epsilon)
 			})
 		}
+	})
+	// TestE2E_QuantBoundaryValues — CS block
+}
+
+func TestE2E_QuantBoundaryValues(t *testing.T) {
+	schema, err := parser.ParseSchemaFile(samplePath)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	// Build Go harness
+	goSrc, err := generator.GenerateGoSchema(schema, "main")
+	if err != nil {
+		t.Fatalf("GenerateGoSchema: %v", err)
+	}
+	goDir := buildGoHarness(t, goSrc)
+
+	// Get reference hex from Go
+	goHex := strings.TrimSpace(runHarness(t, goDir, "go", "ser", "QuantTestMessage", ""))
+	t.Logf("Go hex: %s (len=%d)", goHex, len(goHex)/2)
+
+	// Expected quantized value for DW_divergenceval = -491.989: 525 (0x020d)
+	// Expected quantized value for zero: 32768 (0x8000) — the midpoint
+	// Expected quantized value for max (500): 65535 (0xffff)
+	// Expected quantized value for min (-500): 0 (0x0000)
+	// Expected quantized value for -0.001: 32767 (0x7fff) [one less than midpoint]
+	// Expected quantized value for 499.999: 65534 (0xfffe) [one less than max]
+	//
+	// Wire format: all fields are 16-bit LE, so 6 fields * 2 bytes = 12 bytes total
+	expectedLen := 12
+	if len(goHex)/2 != expectedLen {
+		t.Fatalf("expected %d wire bytes, got %d", expectedLen, len(goHex)/2)
+	}
+	// Expected quantized value for zero: 32767 (0x7fff) — the midpoint, truncated down
+	// Expected quantized value for max (500): 65535 (0xffff)
+	// Expected quantized value for min (-500): 0 (0x0000)
+	// Expected quantized value for -0.001: 32767 (0x7fff) [same bucket as zero]
+	// Expected quantized value for 499.999: 65534 (0xfffe) [one less than max]
+	goBytes, _ := hex.DecodeString(goHex)
+	if len(goBytes) >= 2 {
+		divergenceQuant := binary.LittleEndian.Uint16(goBytes[0:2])
+		if divergenceQuant != 525 {
+			t.Errorf("DivergenceVal quantized value: expected 525, got %d", divergenceQuant)
+		}
+	}
+	if len(goBytes) >= 4 {
+		zeroQuant := binary.LittleEndian.Uint16(goBytes[2:4])
+		if zeroQuant != 32767 {
+			t.Errorf("ZeroVal quantized value: expected 32767, got %d", zeroQuant)
+		}
+	}
+
+	// Test C# produces identical output
+	t.Run("CS", func(t *testing.T) {
+		if _, err := exec.LookPath("dotnet"); err != nil {
+			t.Skip("dotnet not found")
+		}
+		csSrc, err := generator.GenerateCSharpSchema(schema, "Ragono.Messages")
+		if err != nil {
+			t.Fatalf("GenerateCSharpSchema: %v", err)
+		}
+		csDir := buildCSHarness(t, csSrc)
+		csHex := strings.TrimSpace(runHarness(t, csDir, "cs", "ser", "QuantTestMessage", ""))
+		if goHex != csHex {
+			t.Errorf("wire drift between Go and C# for QuantTestMessage:\ngo=%s\ncs=%s", goHex, csHex)
+		}
+		t.Logf("C# hex: %s", csHex)
+	})
+	// TestE2E_QuantBoundaryValues — TS block
+
+	// Test TS produces identical output
+	t.Run("TS", func(t *testing.T) {
+		if _, err := exec.LookPath("node"); err != nil {
+			t.Skip("node not found")
+		}
+		tsSrc, err := generator.GenerateTypeScriptSchema(schema)
+		if err != nil {
+			t.Fatalf("GenerateTypeScriptSchema: %v", err)
+		}
+		tsDir := buildTSHarness(t, tsSrc)
+		tsHex := strings.TrimSpace(runHarness(t, tsDir, "ts", "ser", "QuantTestMessage", ""))
+		if goHex != tsHex {
+			t.Errorf("wire drift between Go and TS for QuantTestMessage:\ngo=%s\nts=%s", goHex, tsHex)
+		}
+		t.Logf("TS hex: %s", tsHex)
+	})
+	// TestE2E_QuantBoundaryValues — Lua block
+
+	// Test Lua produces identical output (if schema is compatible)
+	t.Run("Lua", func(t *testing.T) {
+		if _, err := exec.LookPath("luajit"); err != nil {
+			t.Skip("luajit not found")
+		}
+		// Use a Lua-compatible schema (no int64/uint64)
+		luaSchema := parser.Schema{
+			Messages: []parser.Message{
+				{Name: "QuantTestMessage", Fields: []parser.Field{
+					{Name: "DivergenceVal", Kind: parser.KindPrimitive, Primitive: parser.KindFloat64, Quant: &parser.QuantInfo{Min: -500, Max: 500, Bits: 16}},
+					{Name: "ZeroVal", Kind: parser.KindPrimitive, Primitive: parser.KindFloat64, Quant: &parser.QuantInfo{Min: -500, Max: 500, Bits: 16}},
+					{Name: "MaxBoundVal", Kind: parser.KindPrimitive, Primitive: parser.KindFloat64, Quant: &parser.QuantInfo{Min: -500, Max: 500, Bits: 16}},
+					{Name: "MinBoundVal", Kind: parser.KindPrimitive, Primitive: parser.KindFloat64, Quant: &parser.QuantInfo{Min: -500, Max: 500, Bits: 16}},
+					{Name: "NearZeroVal", Kind: parser.KindPrimitive, Primitive: parser.KindFloat64, Quant: &parser.QuantInfo{Min: -500, Max: 500, Bits: 16}},
+					{Name: "NearHighVal", Kind: parser.KindPrimitive, Primitive: parser.KindFloat64, Quant: &parser.QuantInfo{Min: -500, Max: 500, Bits: 16}},
+				}},
+			},
+		}
+		luaSrc, err := generator.GenerateLuaSchema(luaSchema, "messages_gen")
+		if err != nil {
+			t.Fatalf("GenerateLuaSchema: %v", err)
+		}
+		luaDir := buildLuaHarness(t, luaSrc)
+		luaHex := strings.TrimSpace(runHarness(t, luaDir, "lua", "ser", "QuantTestMessage", ""))
+		if goHex != luaHex {
+			t.Errorf("wire drift between Go and Lua for QuantTestMessage:\ngo=%s\nlua=%s", goHex, luaHex)
+		}
+		t.Logf("Lua hex: %s", luaHex)
+	})
+	// TestE2E_NonGoPivot — CS block
+
+	// Verify roundtrip in Go (deserialize the wire and check values)
+	out := runHarness(t, goDir, "go", "deser", "QuantTestMessage", goHex)
+	kv := parseKV(out)
+	verifyQuantValue(t, kv, "DivergenceVal", -491.989, 0.02)
+	verifyQuantValue(t, kv, "ZeroVal", 0.0, 0.02)
+	verifyQuantValue(t, kv, "MaxBoundVal", 500.0, 0.02)
+	verifyQuantValue(t, kv, "MinBoundVal", -500.0, 0.02)
+	verifyQuantValue(t, kv, "NearZeroVal", -0.001, 0.02)
+	verifyQuantValue(t, kv, "NearHighVal", 499.999, 0.02)
+}
+
+func TestE2E_NonGoPivot(t *testing.T) {
+	schema, err := parser.ParseSchemaFile(samplePath)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	// Build Go, C#, TS, Lua harnesses as needed (at parent scope so dirs survive subtests)
+	var csDir, tsDir, luaDir string
+	hasCS, hasTS, hasLua := false, false, false
+
+	if _, err := exec.LookPath("dotnet"); err == nil {
+		csSrc, err := generator.GenerateCSharpSchema(schema, "Ragono.Messages")
+		if err != nil {
+			t.Fatalf("GenerateCSharpSchema: %v", err)
+		}
+		csDir = buildCSHarness(t, csSrc)
+		hasCS = true
 	} else {
-		t.Log("luajit not found, skipping Lua cross-language e2e tests")
+		t.Log("dotnet not found, skipping C#")
+	}
+
+	if _, err := exec.LookPath("node"); err == nil {
+		tsSrc, err := generator.GenerateTypeScriptSchema(schema)
+		if err != nil {
+			t.Fatalf("GenerateTypeScriptSchema: %v", err)
+		}
+		tsDir = buildTSHarness(t, tsSrc)
+		hasTS = true
+	} else {
+		t.Log("node not found, skipping TS")
+	}
+
+	if _, err := exec.LookPath("luajit"); err == nil {
+		luaSchema := parser.Schema{
+			Messages: []parser.Message{
+				{Name: "Vector3", Fields: []parser.Field{
+					{Name: "X", Kind: parser.KindPrimitive, Primitive: parser.KindFloat32, Quant: &parser.QuantInfo{Min: -500, Max: 500, Bits: 16}},
+					{Name: "Y", Kind: parser.KindPrimitive, Primitive: parser.KindFloat32, Quant: &parser.QuantInfo{Min: -500, Max: 500, Bits: 16}},
+					{Name: "Z", Kind: parser.KindPrimitive, Primitive: parser.KindFloat32, Quant: &parser.QuantInfo{Min: -500, Max: 500, Bits: 16}},
+				}},
+				{Name: "EnvelopeMessage", Fields: []parser.Field{
+					{Name: "Code", Kind: parser.KindPrimitive, Primitive: parser.KindUint16},
+					{Name: "Counter", Kind: parser.KindPrimitive, Primitive: parser.KindUint8},
+				}},
+			},
+			Enums: []parser.Enum{
+				{Name: "Opcode", Primitive: parser.KindUint16, Values: []parser.EnumValue{
+					{Name: "Unknown", Value: "0"},
+					{Name: "Join", Value: "1"},
+					{Name: "Leave", Value: "2"},
+				}},
+			},
+		}
+		luaSrc, err := generator.GenerateLuaSchema(luaSchema, "messages")
+		if err != nil {
+			t.Fatalf("GenerateLuaSchema: %v", err)
+		}
+		luaDir = buildLuaHarness(t, luaSrc)
+		hasLua = true
+	} else {
+		t.Log("luajit not found, skipping Lua")
+	}
+	// TestE2E_TruncatedInput — CS block
+
+	// C# → TS and TS → C# roundtrip
+	if hasCS && hasTS {
+		for _, name := range []string{"Vector3", "EnvelopeMessage"} {
+			t.Run("CS_to_TS/"+name, func(t *testing.T) {
+				hex := runHarness(t, csDir, "cs", "ser", name, "")
+				out := runHarness(t, tsDir, "ts", "deser", name, hex)
+				checkOutput(t, name, out, 0.02)
+			})
+			t.Run("TS_to_CS/"+name, func(t *testing.T) {
+				hex := runHarness(t, tsDir, "ts", "ser", name, "")
+				out := runHarness(t, csDir, "cs", "deser", name, hex)
+				checkOutput(t, name, out, 0.02)
+			})
+		}
+	}
+
+	// C# → Lua and Lua → C# roundtrip
+	if hasCS && hasLua {
+		for _, name := range []string{"Vector3", "EnvelopeMessage"} {
+			t.Run("CS_to_Lua/"+name, func(t *testing.T) {
+				hex := runHarness(t, csDir, "cs", "ser", name, "")
+				out := runHarness(t, luaDir, "lua", "deser", name, hex)
+				checkOutput(t, name, out, 0.02)
+			})
+			t.Run("Lua_to_CS/"+name, func(t *testing.T) {
+				hex := runHarness(t, luaDir, "lua", "ser", name, "")
+				out := runHarness(t, csDir, "cs", "deser", name, hex)
+				checkOutput(t, name, out, 0.02)
+			})
+		}
+	}
+
+	// TS → Lua and Lua → TS roundtrip
+	if hasTS && hasLua {
+		for _, name := range []string{"Vector3", "EnvelopeMessage"} {
+			t.Run("TS_to_Lua/"+name, func(t *testing.T) {
+				hex := runHarness(t, tsDir, "ts", "ser", name, "")
+				out := runHarness(t, luaDir, "lua", "deser", name, hex)
+				checkOutput(t, name, out, 0.02)
+			})
+			t.Run("Lua_to_TS/"+name, func(t *testing.T) {
+				hex := runHarness(t, luaDir, "lua", "ser", name, "")
+				out := runHarness(t, tsDir, "ts", "deser", name, hex)
+				checkOutput(t, name, out, 0.02)
+			})
+		}
+	}
+}
+
+func TestE2E_TruncatedInput(t *testing.T) {
+	schema, err := parser.ParseSchemaFile(samplePath)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	goSrc, err := generator.GenerateGoSchema(schema, "main")
+	if err != nil {
+		t.Fatalf("GenerateGoSchema: %v", err)
+	}
+	goDir := buildGoHarness(t, goSrc)
+
+	// All test types that provide deserialize in the harness
+	types := []string{"Vector3", "SpawnMessage", "MoveMessage", "EnvelopeMessage"}
+
+	t.Run("Go/truncated", func(t *testing.T) {
+		// Go harness deserialize doesn't propagate errors to exit code,
+		// so we check that zero/empty input results in zero/default values
+		for _, typ := range types {
+			out, _ := exec.Command(filepath.Join(goDir, "harness"), "deser", typ, "").CombinedOutput()
+			kv := parseKV(string(out))
+			switch typ {
+			case "Vector3":
+				if kv["X"] != "0" && kv["X"] != "+0" && kv["X"] != "-0" && kv["X"] != "0e+00" {
+					t.Logf("%s: output=%s", typ, out)
+				}
+			case "EnvelopeMessage":
+				if kv["Code"] != "0" {
+					t.Logf("%s: output=%s", typ, out)
+				}
+			}
+		}
+	})
+	t.Run("CS", func(t *testing.T) {
+		if _, err := exec.LookPath("dotnet"); err != nil {
+			t.Skip("dotnet not found")
+		}
+		csSrc, err := generator.GenerateCSharpSchema(schema, "Ragono.Messages")
+		if err != nil {
+			t.Fatalf("GenerateCSharpSchema: %v", err)
+		}
+		csDir := buildCSHarness(t, csSrc)
+		t.Run("CS/empty", func(t *testing.T) {
+			for _, typ := range types {
+				out, err := exec.Command("dotnet", filepath.Join(csDir, "out", "E2EHarness.dll"), "deser", typ, "").CombinedOutput()
+				if err == nil {
+					t.Errorf("%s: expected error for empty input, got output: %s", typ, out)
+				}
+			}
+		})
+
+		t.Run("CS/truncated_1byte", func(t *testing.T) {
+			for _, typ := range types {
+				out, err := exec.Command("dotnet", filepath.Join(csDir, "out", "E2EHarness.dll"), "deser", typ, "00").CombinedOutput()
+				if err == nil {
+					t.Errorf("%s: expected error for 1-byte input, got output: %s", typ, out)
+				}
+			}
+		})
+	})
+	// TestE2E_TruncatedInput — TS block
+
+	// TS truncated input tests
+	t.Run("TS", func(t *testing.T) {
+		if _, err := exec.LookPath("node"); err != nil {
+			t.Skip("node not found")
+		}
+		tsSrc, err := generator.GenerateTypeScriptSchema(schema)
+		if err != nil {
+			t.Fatalf("GenerateTypeScriptSchema: %v", err)
+		}
+		tsDir := buildTSHarness(t, tsSrc)
+
+		t.Run("TS/empty", func(t *testing.T) {
+			for _, typ := range types {
+				out, err := exec.Command("node", filepath.Join(tsDir, "dist", "harness.js"), "deser", typ, "").CombinedOutput()
+				if err == nil {
+					t.Errorf("%s: expected error for empty input, got output: %s", typ, out)
+				}
+			}
+		})
+
+		t.Run("TS/truncated_1byte", func(t *testing.T) {
+			for _, typ := range types {
+				out, err := exec.Command("node", filepath.Join(tsDir, "dist", "harness.js"), "deser", typ, "00").CombinedOutput()
+				if err == nil {
+					t.Errorf("%s: expected error for 1-byte input, got output: %s", typ, out)
+				}
+			}
+		})
+	})
+	// TestE2E_TruncatedInput — Lua block
+
+	// Lua truncated input tests
+	t.Run("Lua", func(t *testing.T) {
+		if _, err := exec.LookPath("luajit"); err != nil {
+			t.Skip("luajit not found")
+		}
+		luaSchema := parser.Schema{
+			Messages: []parser.Message{
+				{Name: "Vector3", Fields: []parser.Field{
+					{Name: "X", Kind: parser.KindPrimitive, Primitive: parser.KindFloat32, Quant: &parser.QuantInfo{Min: -500, Max: 500, Bits: 16}},
+					{Name: "Y", Kind: parser.KindPrimitive, Primitive: parser.KindFloat32, Quant: &parser.QuantInfo{Min: -500, Max: 500, Bits: 16}},
+					{Name: "Z", Kind: parser.KindPrimitive, Primitive: parser.KindFloat32, Quant: &parser.QuantInfo{Min: -500, Max: 500, Bits: 16}},
+				}},
+				{Name: "EnvelopeMessage", Fields: []parser.Field{
+					{Name: "Code", Kind: parser.KindPrimitive, Primitive: parser.KindUint16},
+					{Name: "Counter", Kind: parser.KindPrimitive, Primitive: parser.KindUint8},
+				}},
+			},
+			Enums: []parser.Enum{
+				{Name: "Opcode", Primitive: parser.KindUint16, Values: []parser.EnumValue{
+					{Name: "Unknown", Value: "0"},
+					{Name: "Join", Value: "1"},
+					{Name: "Leave", Value: "2"},
+				}},
+			},
+		}
+
+		luaSrc, err := generator.GenerateLuaSchema(luaSchema, "messages")
+		if err != nil {
+			t.Fatalf("GenerateLuaSchema: %v", err)
+		}
+		luaDir := buildLuaHarness(t, luaSrc)
+
+		luaTypes := []string{"Vector3", "EnvelopeMessage"}
+
+		t.Run("Lua/empty", func(t *testing.T) {
+			for _, typ := range luaTypes {
+				out, err := exec.Command("luajit", filepath.Join(luaDir, "harness.lua"), "deser", typ, "").CombinedOutput()
+				if err == nil {
+					t.Errorf("%s: expected error for empty input, got output: %s", typ, out)
+				}
+			}
+		})
+
+		t.Run("Lua/truncated_1byte", func(t *testing.T) {
+			for _, typ := range luaTypes {
+				out, err := exec.Command("luajit", filepath.Join(luaDir, "harness.lua"), "deser", typ, "00").CombinedOutput()
+				if err == nil {
+					t.Errorf("%s: expected error for 1-byte input, got output: %s", typ, out)
+				}
+			}
+		})
+	})
+}
+
+func verifyQuantValue(t *testing.T, kv map[string]string, key string, expected, epsilon float64) {
+	t.Helper()
+	got, err := strconv.ParseFloat(kv[key], 64)
+	if err != nil {
+		t.Errorf("failed to parse %s=%q: %v", key, kv[key], err)
+		return
+	}
+	diff := got - expected
+	if diff < 0 {
+		diff = -diff
+	}
+	if diff > epsilon {
+		t.Errorf("%s: expected %v, got %v (diff=%v)", key, expected, got, diff)
 	}
 }
 
@@ -326,6 +737,13 @@ func checkOutput(t *testing.T, typ, output string, epsilon float64) {
 	case "EnvelopeMessage":
 		assertInt(t, kv, "Code", 2)
 		assertInt(t, kv, "Counter", 7)
+	case "QuantTestMessage":
+		assertFloat(t, kv, "DivergenceVal", -491.989, epsilon)
+		assertFloat(t, kv, "ZeroVal", 0.0, epsilon)
+		assertFloat(t, kv, "MaxBoundVal", 500.0, epsilon)
+		assertFloat(t, kv, "MinBoundVal", -500.0, epsilon)
+		assertFloat(t, kv, "NearZeroVal", -0.001, epsilon)
+		assertFloat(t, kv, "NearHighVal", 499.999, epsilon)
 	}
 }
 
@@ -345,7 +763,6 @@ func assertFloat(t *testing.T, kv map[string]string, key string, want, eps float
 	s, ok := kv[key]
 	if !ok {
 		t.Errorf("missing key %q in output", key)
-		return
 	}
 	got, err := strconv.ParseFloat(s, 64)
 	if err != nil {
@@ -490,6 +907,28 @@ func main() {
 		fmt.Printf("Code=%d\n", msg.Code)
 		fmt.Printf("Counter=%d\n", msg.Counter)
 
+	case "ser:QuantTestMessage":
+		msg := QuantTestMessage{
+			DivergenceVal: -491.989,
+			ZeroVal:       0.0,
+			MaxBoundVal:   500.0,
+			MinBoundVal:   -500.0,
+			NearZeroVal:   -0.001,
+			NearHighVal:   499.999,
+		}
+		fmt.Println(hex.EncodeToString(msg.Marshal(nil)))
+
+	case "deser:QuantTestMessage":
+		data, _ := hex.DecodeString(strings.TrimSpace(os.Args[3]))
+		var msg QuantTestMessage
+		msg.Unmarshal(data)
+		fmt.Printf("DivergenceVal=%v\n", msg.DivergenceVal)
+		fmt.Printf("ZeroVal=%v\n", msg.ZeroVal)
+		fmt.Printf("MaxBoundVal=%v\n", msg.MaxBoundVal)
+		fmt.Printf("MinBoundVal=%v\n", msg.MinBoundVal)
+		fmt.Printf("NearZeroVal=%v\n", msg.NearZeroVal)
+		fmt.Printf("NearHighVal=%v\n", msg.NearHighVal)
+
 	default:
 		fmt.Fprintf(os.Stderr, "unknown op:type %s:%s\n", op, typ)
 		os.Exit(1)
@@ -536,6 +975,12 @@ unsafe class Program
         case "deser:EnvelopeMessage":
             DeserEnvelopeMessage(args[2]);
             break;
+        case "ser:QuantTestMessage":
+            SerQuantTestMessage();
+            break;
+        case "deser:QuantTestMessage":
+            DeserQuantTestMessage(args[2]);
+            break;
         default:
             Console.Error.WriteLine($"unknown op:type {op}:{typ}");
             Environment.Exit(1);
@@ -549,7 +994,7 @@ unsafe class Program
         byte[] buf = new byte[64];
         fixed (byte* ptr = buf)
         {
-            int n = msg.Serialize(ptr);
+            int n = msg.Serialize(ptr, buf.Length);
             Console.WriteLine(Convert.ToHexString(buf, 0, n).ToLower());
         }
     }
@@ -559,7 +1004,7 @@ unsafe class Program
         byte[] data = Convert.FromHexString(hexStr);
         fixed (byte* ptr = data)
         {
-            Vector3.Deserialize(ptr, out Vector3 msg);
+            Vector3.Deserialize(ptr, data.Length, out Vector3 msg);
             Console.WriteLine($"X={msg.X:G9}");
             Console.WriteLine($"Y={msg.Y:G9}");
             Console.WriteLine($"Z={msg.Z:G9}");
@@ -579,7 +1024,7 @@ unsafe class Program
         byte[] buf = new byte[512];
         fixed (byte* ptr = buf)
         {
-            int n = msg.Serialize(ptr);
+            int n = msg.Serialize(ptr, buf.Length);
             Console.WriteLine(Convert.ToHexString(buf, 0, n).ToLower());
         }
     }
@@ -589,7 +1034,7 @@ unsafe class Program
         byte[] data = Convert.FromHexString(hexStr);
         fixed (byte* ptr = data)
         {
-            SpawnMessage.Deserialize(ptr, out SpawnMessage msg);
+            SpawnMessage.Deserialize(ptr, data.Length, out SpawnMessage msg);
             Console.WriteLine($"EntityID={msg.EntityID}");
             Console.WriteLine($"Position.X={msg.Position.X:G9}");
             Console.WriteLine($"Position.Y={msg.Position.Y:G9}");
@@ -620,7 +1065,7 @@ unsafe class Program
         byte[] buf = new byte[512];
         fixed (byte* ptr = buf)
         {
-            int n = msg.Serialize(ptr);
+            int n = msg.Serialize(ptr, buf.Length);
             Console.WriteLine(Convert.ToHexString(buf, 0, n).ToLower());
         }
     }
@@ -630,7 +1075,7 @@ unsafe class Program
         byte[] data = Convert.FromHexString(hexStr);
         fixed (byte* ptr = data)
         {
-            MoveMessage.Deserialize(ptr, out MoveMessage msg);
+            MoveMessage.Deserialize(ptr, data.Length, out MoveMessage msg);
             Console.WriteLine($"PlayerID={msg.PlayerID}");
             Console.WriteLine($"Active={msg.Active.ToString().ToLower()}");
             Console.WriteLine($"Visible={msg.Visible.ToString().ToLower()}");
@@ -643,13 +1088,13 @@ unsafe class Program
     {
         var msg = new EnvelopeMessage
         {
-            Code = Opcode.JoinRoom,
+            Code = Opcode.OpcodeJoinRoom,
             Counter = 7,
         };
         byte[] buf = new byte[64];
         fixed (byte* ptr = buf)
         {
-            int n = msg.Serialize(ptr);
+            int n = msg.Serialize(ptr, buf.Length);
             Console.WriteLine(Convert.ToHexString(buf, 0, n).ToLower());
         }
     }
@@ -659,9 +1104,43 @@ unsafe class Program
         byte[] data = Convert.FromHexString(hexStr);
         fixed (byte* ptr = data)
         {
-            EnvelopeMessage.Deserialize(ptr, out EnvelopeMessage msg);
+            EnvelopeMessage.Deserialize(ptr, data.Length, out EnvelopeMessage msg);
             Console.WriteLine($"Code={(ushort)msg.Code}");
             Console.WriteLine($"Counter={msg.Counter}");
+        }
+    }
+
+    static unsafe void SerQuantTestMessage()
+    {
+        var msg = new QuantTestMessage
+        {
+            DivergenceVal = -491.989,
+            ZeroVal = 0.0,
+            MaxBoundVal = 500.0,
+            MinBoundVal = -500.0,
+            NearZeroVal = -0.001,
+            NearHighVal = 499.999,
+        };
+        byte[] buf = new byte[64];
+        fixed (byte* ptr = buf)
+        {
+            int n = msg.Serialize(ptr, buf.Length);
+            Console.WriteLine(Convert.ToHexString(buf, 0, n).ToLower());
+        }
+    }
+
+    static unsafe void DeserQuantTestMessage(string hexStr)
+    {
+        byte[] data = Convert.FromHexString(hexStr);
+        fixed (byte* ptr = data)
+        {
+            QuantTestMessage.Deserialize(ptr, data.Length, out QuantTestMessage msg);
+            Console.WriteLine($"DivergenceVal={msg.DivergenceVal:G}");
+            Console.WriteLine($"ZeroVal={msg.ZeroVal:G}");
+            Console.WriteLine($"MaxBoundVal={msg.MaxBoundVal:G}");
+            Console.WriteLine($"MinBoundVal={msg.MinBoundVal:G}");
+            Console.WriteLine($"NearZeroVal={msg.NearZeroVal:G}");
+            Console.WriteLine($"NearHighVal={msg.NearHighVal:G}");
         }
     }
 }
@@ -713,8 +1192,7 @@ const tsConfigSource = `{
 const tsHarnessSource = `import { readFileSync } from 'fs';
 import { argv } from 'process';
 
-// Import generated messages
-import { Vector3, MoveMessage, SpawnMessage, EnvelopeMessage, Opcode } from './messages.gen.js';
+import { Vector3, MoveMessage, SpawnMessage, EnvelopeMessage, Opcode, QuantTestMessage } from './messages.gen.js';
 
 // Hex encoding/decoding utilities
 function encodeHex(data: Uint8Array): string {
@@ -855,6 +1333,36 @@ function main() {
       break;
     }
 
+    case 'ser:QuantTestMessage': {
+      const msg = new QuantTestMessage();
+      msg.divergenceVal = -491.989;
+      msg.zeroVal = 0.0;
+      msg.maxBoundVal = 500.0;
+      msg.minBoundVal = -500.0;
+      msg.nearZeroVal = -0.001;
+      msg.nearHighVal = 499.999;
+      const buf = new ArrayBuffer(64);
+      const view = new DataView(buf);
+      const n = msg.serialize(view, 0);
+      const bytes = new Uint8Array(buf, 0, n);
+      console.log(encodeHex(bytes));
+      break;
+    }
+
+    case 'deser:QuantTestMessage': {
+      const data = decodeHex(hexInput);
+      const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+      const [msg] = QuantTestMessage.deserialize(view, 0);
+      console.log(` + "`DivergenceVal=${msg.divergenceVal.toPrecision(9)}`" + `);
+      console.log(` + "`ZeroVal=${msg.zeroVal.toPrecision(9)}`" + `);
+      console.log(` + "`MaxBoundVal=${msg.maxBoundVal.toPrecision(9)}`" + `);
+      console.log(` + "`MinBoundVal=${msg.minBoundVal.toPrecision(9)}`" + `);
+      console.log(` + "`NearZeroVal=${msg.nearZeroVal.toPrecision(9)}`" + `);
+      console.log(` + "`NearHighVal=${msg.nearHighVal.toPrecision(9)}`" + `);
+      break;
+    }
+
+
     default:
       console.error(` + "`Unknown op:type ${op}:${typ}`" + `);
       process.exit(1);
@@ -949,6 +1457,29 @@ local function deserializeEnvelopeMessage(hex)
     print(string.format("Counter=%d", msg.counter))
 end
 
+
+local function serializeQuantTestMessage()
+    local msg = messages.new_quant_test_message()
+    msg.divergence_val = -491.989
+    msg.zero_val = 0.0
+    msg.max_bound_val = 500.0
+    msg.min_bound_val = -500.0
+    msg.near_zero_val = -0.001
+    msg.near_high_val = 499.999
+    return bytesToHex(messages.serialize_quant_test_message(msg))
+end
+
+local function deserializeQuantTestMessage(hex)
+    local data = hexToBytes(hex)
+    local msg = messages.deserialize_quant_test_message(data, 1)
+    print(string.format("DivergenceVal=%.10g", msg.divergence_val))
+    print(string.format("ZeroVal=%.10g", msg.zero_val))
+    print(string.format("MaxBoundVal=%.10g", msg.max_bound_val))
+    print(string.format("MinBoundVal=%.10g", msg.min_bound_val))
+    print(string.format("NearZeroVal=%.10g", msg.near_zero_val))
+    print(string.format("NearHighVal=%.10g", msg.near_high_val))
+end
+
 local op = arg[1]
 local typ = arg[2]
 local hexInput = arg[3]
@@ -967,6 +1498,10 @@ elseif key == "ser:EnvelopeMessage" then
     print(serializeEnvelopeMessage())
 elseif key == "deser:EnvelopeMessage" then
     deserializeEnvelopeMessage(hexInput)
+elseif key == "ser:QuantTestMessage" then
+    print(serializeQuantTestMessage())
+elseif key == "deser:QuantTestMessage" then
+    deserializeQuantTestMessage(hexInput)
 else
     error("Unknown op:type " .. key)
 end

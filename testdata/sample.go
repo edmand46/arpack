@@ -37,3 +37,12 @@ type EnvelopeMessage struct {
 	Code    Opcode
 	Counter uint8
 }
+
+type QuantTestMessage struct {
+	DivergenceVal float64 `pack:"min=-500,max=500,bits=16"`
+	ZeroVal       float64 `pack:"min=-500,max=500,bits=16"`
+	MaxBoundVal   float64 `pack:"min=-500,max=500,bits=16"`
+	MinBoundVal   float64 `pack:"min=-500,max=500,bits=16"`
+	NearZeroVal   float64 `pack:"min=-500,max=500,bits=16"`
+	NearHighVal   float64 `pack:"min=-500,max=500,bits=16"`
+}

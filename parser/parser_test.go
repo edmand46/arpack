@@ -356,3 +356,58 @@ type Msg struct {
 		})
 	}
 }
+
+func TestParse_NestedCollections(t *testing.T) {
+	cases := []struct {
+		name    string
+		src     string
+		wantErr string
+	}{
+		{
+			name: "slice of slices",
+			src: `package p
+type Msg struct {
+	Items [][]float64
+}
+`,
+			wantErr: "nested arrays/slices not supported",
+		},
+		{
+			name: "fixed array of slices",
+			src: `package p
+type Msg struct {
+	Items [3][]int32
+}
+`,
+			wantErr: "nested arrays/slices not supported",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := ParseSource(tc.src)
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("expected error containing %q, got %v", tc.wantErr, err)
+			}
+		})
+	}
+}
+
+func TestParse_EmbeddedFieldsRejected(t *testing.T) {
+	src := `package p
+type Bar struct{}
+type Foo struct {
+	Bar
+	Value float64
+}
+`
+	_, err := ParseSource(src)
+	if err == nil {
+		t.Fatal("expected error for embedded field, got nil")
+	}
+	if !strings.Contains(err.Error(), "embedded fields not supported") {
+		t.Fatalf("expected error containing 'embedded fields not supported', got %v", err)
+	}
+}

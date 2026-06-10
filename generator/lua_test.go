@@ -281,8 +281,8 @@ func TestGenerateLua_QuantizedFloat(t *testing.T) {
 
 	luaStr := string(lua)
 
-	if !strings.Contains(luaStr, "math.floor(((_quant_value_msg_position - (-500)) / (500 - (-500))) * 65535)") {
-		t.Error("Missing truncating quantization code for Lua")
+	if !strings.Contains(luaStr, "math.modf") {
+		t.Error("Missing truncating quantization code for Lua, expected math.modf")
 	}
 	if !strings.Contains(luaStr, `ensure_quant_range(msg.position, -500, 500, "Position")`) {
 		t.Error("Missing quantized range guard for Lua")

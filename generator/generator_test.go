@@ -254,8 +254,11 @@ func TestGenerateCSharp_Output(t *testing.T) {
 	if !strings.Contains(code, "public Opcode Code;") {
 		t.Error("EnvelopeMessage.Code should use generated enum type")
 	}
-	if !strings.Contains(code, "internal static class ArpackGenerated") {
+	if !strings.Contains(code, "internal static unsafe class ArpackGenerated") {
 		t.Error("missing shared ArpackGenerated helper class")
+	}
+	if !strings.Contains(code, "EnsureReadable") {
+		t.Error("missing bounds-check helper")
 	}
 	if !strings.Contains(code, "EnsureU16Length") {
 		t.Error("missing uint16 length guard helper")
@@ -479,4 +482,150 @@ func TestBoolPacking_CSharpCode(t *testing.T) {
 	if !strings.Contains(code, "& (1 <<") {
 		t.Error("C#: missing bit AND for bool unpacking")
 	}
+}
+
+func TestGenerateCSharp_RuntimeGuards(t *testing.T) {
+	if _, err := exec.LookPath("dotnet"); err != nil {
+		t.Skip("dotnet not found")
+	}
+
+	schema := parser.Schema{
+		Messages: []parser.Message{
+			{
+				Name: "Guarded",
+				Fields: []parser.Field{
+					{Name: "Name", Kind: parser.KindPrimitive, Primitive: parser.KindString},
+					{
+						Name:      "Ratio",
+						Kind:      parser.KindPrimitive,
+						Primitive: parser.KindFloat32,
+						Quant:     &parser.QuantInfo{Min: 0, Max: 1, Bits: 8},
+					},
+				},
+			},
+		},
+	}
+
+	src, err := GenerateCSharpSchema(schema, "Test.Messages")
+	if err != nil {
+		t.Fatalf("GenerateCSharpSchema: %v", err)
+	}
+
+	out := runGeneratedCSharpProgram(t, src, `using System;
+using Test.Messages;
+
+unsafe class Program
+{
+    static void Emit(string label, Action action)
+    {
+        try
+        {
+            action();
+            Console.WriteLine(label + ":OK");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine(label + ":" + ex.GetType().Name + ":" + ex.Message);
+        }
+    }
+
+    static void Main()
+    {
+        Emit("TRUNC", () =>
+        {
+            byte[] data = Array.Empty<byte>();
+            fixed (byte* ptr = data)
+            {
+                Guarded.Deserialize(ptr, data.Length, out Guarded _);
+            }
+        });
+
+        Emit("LEN", () =>
+        {
+            var msg = new Guarded { Name = new string('a', 65536) };
+            byte[] data = new byte[2];
+            fixed (byte* ptr = data)
+            {
+                msg.Serialize(ptr, data.Length);
+            }
+        });
+
+        Emit("QUANT", () =>
+        {
+            var msg = new Guarded { Ratio = 2f };
+            byte[] data = new byte[4];
+            fixed (byte* ptr = data)
+            {
+                msg.Serialize(ptr, data.Length);
+            }
+        });
+
+        Emit("OVERFLOW", () =>
+        {
+            var msg = new Guarded { Name = "hello", Ratio = 0.5f };
+            byte[] data = new byte[3];
+            fixed (byte* ptr = data)
+            {
+                msg.Serialize(ptr, data.Length);
+            }
+        });
+    }
+}
+`)
+
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if len(lines) != 4 {
+		t.Fatalf("expected 4 output lines, got %d: %q", len(lines), out)
+	}
+	if !strings.Contains(lines[0], "ArgumentException:arpack: buffer too short for string length for Name") {
+		t.Fatalf("expected truncated-input guard, got %q", lines[0])
+	}
+	if !strings.Contains(lines[1], "InvalidOperationException:arpack: string length for Name exceeds uint16 limit") {
+		t.Fatalf("expected string length guard, got %q", lines[1])
+	}
+	if !strings.Contains(lines[2], "ArgumentOutOfRangeException:arpack: quantized value out of range for Ratio") {
+		t.Fatalf("expected quantized range guard, got %q", lines[2])
+	}
+	if !strings.Contains(lines[3], "ArgumentException:arpack: buffer too small for string data for Name") {
+		t.Fatalf("expected serialize write-bounds guard, got %q", lines[3])
+	}
+}
+
+func runGeneratedCSharpProgram(t *testing.T, generatedSrc []byte, programSrc string) string {
+	t.Helper()
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "Messages.cs"), generatedSrc, 0o600); err != nil {
+		t.Fatalf("write generated source: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "Program.cs"), []byte(programSrc), 0o600); err != nil {
+		t.Fatalf("write program source: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "RuntimeGuards.csproj"), []byte(`<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net9.0</TargetFramework>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+</Project>
+`), 0o600); err != nil {
+		t.Fatalf("write csproj: %v", err)
+	}
+
+	build := exec.Command("dotnet", "build", "-c", "Release", "-o", "out")
+	build.Dir = dir
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("dotnet build failed: %v\n%s", err, out)
+	}
+
+	run := exec.Command(filepath.Join(dir, "out", "RuntimeGuards"))
+	run.Dir = dir
+	out, err := run.CombinedOutput()
+	if err != nil {
+		t.Fatalf("runtime guard program failed: %v\n%s", err, out)
+	}
+
+	return string(out)
 }

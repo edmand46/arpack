@@ -241,15 +241,31 @@ type Schema struct {
 	Enums       []Enum
 }
 
+// MinWireSize returns the minimum number of wire bytes the message can
+// occupy: variable-length fields count only their 2-byte length prefix, and
+// runs of consecutive bool fields are bit-packed (up to 8 per byte), matching
+// the layout the generators emit.
 func (m *Message) MinWireSize() int {
 	total := 0
-	for _, f := range m.Fields {
+	i := 0
+	for i < len(m.Fields) {
+		f := m.Fields[i]
+		if f.Kind == KindPrimitive && f.Primitive == KindBool {
+			run := 0
+			for i < len(m.Fields) && m.Fields[i].Kind == KindPrimitive && m.Fields[i].Primitive == KindBool {
+				run++
+				i++
+			}
+			total += (run + 7) / 8
+			continue
+		}
 		s := f.WireSize()
 		if s == -1 {
 			total += 2
 		} else {
 			total += s
 		}
+		i++
 	}
 	return total
 }

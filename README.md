@@ -9,16 +9,16 @@
 ![GitHub License](https://img.shields.io/github/license/edmand46/arpack)
 
 
-Binary serialization code generator for Go, C#, TypeScript, and Lua. Define messages once as Go structs — get zero-allocation `Marshal`/`Unmarshal` for Go, `unsafe` pointer-based `Serialize`/`Deserialize` for C#, `DataView`-based serialization for TypeScript/browser, and pure Lua implementation for Defold/LuaJIT.
+Binary serialization code generator for Go, C#, TypeScript, and Lua. Define messages once as Go structs — get zero-allocation `Marshal` and low-allocation `Unmarshal` for Go, `unsafe` pointer-based `Serialize`/`Deserialize` for C#, `DataView`-based serialization for TypeScript/browser, and pure Lua implementation for Defold/LuaJIT.
 
 ## Features
 
-- **Single source of truth** — define messages in Go, generate code for Go, C#, TypeScript, and Lua
+- **Single source of truth** — define messages in Go, generate code for all four targets
 - **Float quantization** — compress `float32`/`float64` to 8 or 16 bits with a `pack` struct tag
 - **Boolean packing** — consecutive `bool` fields are packed into single bytes (up to 8 per byte)
 - **Enums** — `type Opcode uint16` + `const` block becomes C#/TypeScript enums
 - **Nested types, fixed arrays, slices** — full support for complex message structures
-- **Cross-language binary compatibility** — Go, C#, TypeScript, and Lua produce identical wire formats
+- **Cross-language binary compatibility** — all four targets produce identical wire formats
 - **Browser support** — TypeScript target uses native DataView API for zero-dependency serialization
 
 ## When to use
@@ -28,7 +28,7 @@ ArPack is designed for real-time multiplayer games and other latency-sensitive s
 Typical setups:
 
 - **[Nakama](https://heroiclabs.com/nakama/) + Unity** — define all network messages in Go, generate C# structs for Unity. Both sides share the exact same wire format with no reflection or boxing.
-- **Custom Go game server + Unity** — roll your own server without pulling in a serialization framework. ArPack generates plain `Marshal`/`Unmarshal` methods with zero allocations on the hot path.
+- **Custom Go game server + Unity** — roll your own server without pulling in a serialization framework. ArPack generates plain `Marshal`/`Unmarshal` methods with zero allocations on fixed-size hot paths.
 - **Any Go service + .NET client** — works anywhere you control both ends and want a compact binary protocol without Protobuf's runtime overhead or code-gen complexity.
 - **Go backend + Browser/WebSocket** — generate TypeScript classes for browser-based clients. Uses native DataView API with zero dependencies.
 - **Go backend + Defold/Lua** — generate Lua modules for Defold game engine. Pure Lua implementation compatible with LuaJIT.
@@ -43,7 +43,8 @@ go install github.com/edmand46/arpack/cmd/arpack@latest
 
 ```bash
 # Generate Go + C# + TypeScript
-arpack -in messages.go -out-go ./gen -out-cs ../Unity/Assets/Scripts -out-ts ./web/src/messages
+# (-out-go points at the schema's own package directory — see "Go co-location" below)
+arpack -in messages/messages.go -out-go ./messages -out-cs ../Unity/Assets/Scripts -out-ts ./web/src/messages
 
 # Generate only TypeScript
 arpack -in messages.go -out-ts ./web/src/messages
@@ -77,6 +78,10 @@ ArPack `v1` intentionally supports a narrow schema model:
 - Wire format is stable within `v1.x` for unchanged schemas.
 
 This is a deliberate product boundary for predictable code generation and cross-language compatibility.
+
+**Go co-location:** The generated Go file contains only `Marshal`/`Unmarshal` methods, not the struct definitions. It must compile in the same package as the schema structs. The package name comes from the `-out-go` directory basename, so point `-out-go` at the schema's own package directory (schema in `./messages/messages.go` → `-out-go ./messages`). If the basename is not a valid Go package name (a keyword like `go`, or a name with dots), arpack falls back to the schema's package name. Schemas containing only enums skip the Go target entirely: the enum declarations already live in your schema source.
+
+**Atomic output:** with multiple `-out-*` flags, arpack generates every target in memory first and writes files only if all targets succeed. A failing target (e.g. `int64` with `-out-lua`) leaves nothing partially updated on disk.
 
 ## Schema Definition
 
@@ -161,18 +166,18 @@ func (m *MoveMessage) Unmarshal(data []byte) (int, error)
 
 `Marshal` appends to the buffer and returns it. `Unmarshal` reads from the buffer and returns bytes consumed.
 
-**Failure behavior:** generated `Marshal` panics if a string/slice exceeds the `uint16` wire limit or if a quantized value is outside its declared range.
+**Failure behavior:** generated `Marshal` panics if a string/slice exceeds the `uint16` wire limit or if a quantized value is outside its declared range. `Unmarshal` returns an error on truncated input.
 
 ### C#
 
 ```csharp
-public unsafe int Serialize(byte* buffer)
-public static unsafe int Deserialize(byte* buffer, out MoveMessage msg)
+public unsafe int Serialize(byte* buffer, int length)
+public static unsafe int Deserialize(byte* buffer, int length, out MoveMessage msg)
 ```
 
-Uses unsafe pointers for zero-copy serialization. Returns bytes written/consumed.
+Uses unsafe pointers for zero-copy serialization, with explicit bounds checks in both directions. Returns bytes written/consumed.
 
-**Failure behavior:** generated `Serialize` throws if a string/slice exceeds the `uint16` wire limit or if a quantized value is outside its declared range.
+**Failure behavior:** generated `Serialize` throws if the destination buffer is too small, if a string/slice exceeds the `uint16` wire limit, or if a quantized value is outside its declared range. `Deserialize` throws on malformed or truncated input.
 
 ### TypeScript
 
@@ -181,7 +186,7 @@ export class MoveMessage {
   position: Vector3 = new Vector3();
   velocity: number[] = new Array<number>(3).fill(0);
   waypoints: Vector3[] = [];
-  playerId: number = 0;
+  playerID: number = 0;
   active: boolean = false;
   visible: boolean = false;
   ghost: boolean = false;
@@ -194,9 +199,9 @@ export class MoveMessage {
 
 Uses native DataView API for browser-compatible serialization with zero dependencies. Returns bytes written/consumed.
 
-**Note:** TypeScript field names are converted to camelCase (e.g., `PlayerID` → `playerId`).
+**Note:** TypeScript field names are converted to camelCase (e.g., `PlayerID` → `playerID`).
 
-**Failure behavior:** generated `serialize(...)` throws `RangeError` if a string/slice exceeds the `uint16` wire limit or if a quantized value is outside its declared range.
+**Failure behavior:** generated `serialize(...)` throws `RangeError` if a string/slice exceeds the `uint16` wire limit or if a quantized value is outside its declared range. `deserialize(...)` throws `RangeError` on malformed or truncated input.
 
 ### Lua
 
@@ -239,7 +244,7 @@ Uses pure Lua with inline helper functions for byte manipulation. Compatible wit
 Within `v1.x`, the following are considered compatibility guarantees for a fixed schema:
 
 - Same field declaration order produces the same wire layout.
-- Go, C#, TypeScript, and Lua generators produce identical wire bytes for supported types.
+- All four generators produce identical wire bytes for supported types.
 - `string` and `[]T` always use `uint16` length prefixes.
 - Consecutive `bool` fields are bit-packed in declaration order, least-significant bit first.
 - Enum fields use their declared underlying integer type on the wire.
@@ -256,12 +261,12 @@ The following are breaking changes:
 
 ### Go Results (M3 Max)
 ```
-BenchmarkArPack_Marshal-16        382568360    9.5 ns/op    5065 MB/s    0 B/op    0 allocs/op
-BenchmarkArPack_Unmarshal-16       98895892   34.6 ns/op    1388 MB/s   40 B/op    2 allocs/op
-BenchmarkProto_Marshal-16          21989466  163.6 ns/op     416 MB/s    0 B/op    0 allocs/op
-BenchmarkProto_Unmarshal-16        13950333  256.9 ns/op     265 MB/s  248 B/op    7 allocs/op
-BenchmarkFlatBuffers_Marshal-16    16297458  221.4 ns/op     687 MB/s    0 B/op    0 allocs/op
-BenchmarkFlatBuffers_Unmarshal-16  56095480   64.8 ns/op    2345 MB/s   24 B/op    1 allocs/op
+BenchmarkArPack_Marshal-16         83912905   14.1 ns/op    3406 MB/s    0 B/op    0 allocs/op
+BenchmarkArPack_Unmarshal-16       35124906   33.7 ns/op    1426 MB/s   40 B/op    2 allocs/op
+BenchmarkProto_Marshal-16           7202112  166.7 ns/op     408 MB/s    0 B/op    0 allocs/op
+BenchmarkProto_Unmarshal-16         4653706  258.0 ns/op     264 MB/s  248 B/op    7 allocs/op
+BenchmarkFlatBuffers_Marshal-16     5282973  228.9 ns/op     664 MB/s    0 B/op    0 allocs/op
+BenchmarkFlatBuffers_Unmarshal-16  18426291   65.3 ns/op    2327 MB/s   24 B/op    1 allocs/op
 ```
 
 | Format | Size |
