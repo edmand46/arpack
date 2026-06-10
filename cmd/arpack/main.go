@@ -117,7 +117,7 @@ func buildOutputs(schema parser.Schema, req genRequest) (files []genFile, notice
 
 			src, genErr := generator.GenerateGoSchema(schema, pkgName)
 			if genErr != nil {
-				return nil, notices, fmt.Errorf("Go generation error: %w", genErr)
+				return nil, notices, fmt.Errorf("generating Go: %w", genErr)
 			}
 			files = append(files, genFile{dir: req.outGo, path: filepath.Join(req.outGo, baseName+"_gen.go"), data: src})
 		}
@@ -126,7 +126,7 @@ func buildOutputs(schema parser.Schema, req genRequest) (files []genFile, notice
 	if req.outCS != "" {
 		src, genErr := generator.GenerateCSharpSchema(schema, req.namespace)
 		if genErr != nil {
-			return nil, notices, fmt.Errorf("C# generation error: %w", genErr)
+			return nil, notices, fmt.Errorf("generating C#: %w", genErr)
 		}
 		files = append(files, genFile{dir: req.outCS, path: filepath.Join(req.outCS, toTitle(baseName)+".gen.cs"), data: src})
 	}
@@ -134,7 +134,7 @@ func buildOutputs(schema parser.Schema, req genRequest) (files []genFile, notice
 	if req.outTS != "" {
 		src, genErr := generator.GenerateTypeScriptSchema(schema)
 		if genErr != nil {
-			return nil, notices, fmt.Errorf("TypeScript generation error: %w", genErr)
+			return nil, notices, fmt.Errorf("generating TypeScript: %w", genErr)
 		}
 		files = append(files, genFile{dir: req.outTS, path: filepath.Join(req.outTS, toTitle(baseName)+".gen.ts"), data: src})
 	}
@@ -142,7 +142,7 @@ func buildOutputs(schema parser.Schema, req genRequest) (files []genFile, notice
 	if req.outLua != "" {
 		src, genErr := generator.GenerateLuaSchema(schema, baseName)
 		if genErr != nil {
-			return nil, notices, fmt.Errorf("Lua generation error: %w", genErr)
+			return nil, notices, fmt.Errorf("generating Lua: %w", genErr)
 		}
 		// Use snake_case filename for Lua require() compatibility
 		files = append(files, genFile{dir: req.outLua, path: filepath.Join(req.outLua, toSnakeCase(baseName)+"_gen.lua"), data: src})

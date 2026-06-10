@@ -97,7 +97,7 @@ func TestBuildOutputs_FailingTargetProducesNoFiles(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for uint64 with -out-lua, got nil")
 	}
-	if !strings.Contains(err.Error(), "Lua generation error") {
+	if !strings.Contains(err.Error(), "generating Lua") {
 		t.Fatalf("expected Lua generation error, got %v", err)
 	}
 	if len(files) != 0 {

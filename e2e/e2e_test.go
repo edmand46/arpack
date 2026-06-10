@@ -322,12 +322,12 @@ func TestE2E_QuantBoundaryValues(t *testing.T) {
 	// Verify roundtrip in Go (deserialize the wire and check values)
 	out := runHarness(t, goDir, "go", "deser", "QuantTestMessage", goHex)
 	kv := parseKV(out)
-	verifyQuantValue(t, kv, "DivergenceVal", -491.989, 0.02)
-	verifyQuantValue(t, kv, "ZeroVal", 0.0, 0.02)
-	verifyQuantValue(t, kv, "MaxBoundVal", 500.0, 0.02)
-	verifyQuantValue(t, kv, "MinBoundVal", -500.0, 0.02)
-	verifyQuantValue(t, kv, "NearZeroVal", -0.001, 0.02)
-	verifyQuantValue(t, kv, "NearHighVal", 499.999, 0.02)
+	verifyQuantValue(t, kv, "DivergenceVal", -491.989)
+	verifyQuantValue(t, kv, "ZeroVal", 0.0)
+	verifyQuantValue(t, kv, "MaxBoundVal", 500.0)
+	verifyQuantValue(t, kv, "MinBoundVal", -500.0)
+	verifyQuantValue(t, kv, "NearZeroVal", -0.001)
+	verifyQuantValue(t, kv, "NearHighVal", 499.999)
 }
 
 func TestE2E_NonGoPivot(t *testing.T) {
@@ -590,8 +590,10 @@ func TestE2E_TruncatedInput(t *testing.T) {
 	})
 }
 
-func verifyQuantValue(t *testing.T, kv map[string]string, key string, expected, epsilon float64) {
+func verifyQuantValue(t *testing.T, kv map[string]string, key string, expected float64) {
 	t.Helper()
+	// One bits=16 quant step over [-500,500] is 1000/65535 ≈ 0.0153; allow a bit more.
+	const epsilon = 0.02
 	got, err := strconv.ParseFloat(kv[key], 64)
 	if err != nil {
 		t.Errorf("failed to parse %s=%q: %v", key, kv[key], err)
