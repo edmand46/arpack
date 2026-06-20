@@ -17,7 +17,7 @@ import (
 var (
 	sinkBytes           []byte
 	sinkArpackMove      arpackmsg.MoveMessage
-	sinkProtoMove       benchpb.MoveMessage
+	sinkProtoPlayerID   uint32
 	sinkFlatBuffersMove benchfbs.MoveMsg
 )
 
@@ -107,7 +107,8 @@ func TestMessageSize(t *testing.T) {
 		!pbOut.Active || pbOut.Visible || !pbOut.Ghost ||
 		len(pbOut.Waypoints) != 2 || len(pbOut.Velocity) != 3 ||
 		pbOut.Position == nil || pbOut.Position.X != 100 {
-		t.Errorf("Proto round-trip mismatch: %+v", pbOut)
+		t.Errorf("Proto round-trip mismatch: PlayerId=%d Name=%q Active=%v Visible=%v Ghost=%v Waypoints=%d Velocity=%d Position=%v",
+			pbOut.PlayerId, pbOut.Name, pbOut.Active, pbOut.Visible, pbOut.Ghost, len(pbOut.Waypoints), len(pbOut.Velocity), pbOut.Position)
 	}
 
 	var fbOut benchfbs.MoveMsg
@@ -217,7 +218,7 @@ func BenchmarkProto_Unmarshal(b *testing.B) {
 			b.Fatal(err)
 		}
 	}
-	sinkProtoMove = out
+	sinkProtoPlayerID = out.PlayerId
 }
 
 // --- FlatBuffers benchmarks ---
