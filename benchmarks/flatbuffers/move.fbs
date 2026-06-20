@@ -1,0 +1,20 @@
+namespace benchfbs;
+
+struct Vec3 {
+  x:float;
+  y:float;
+  z:float;
+}
+
+table MoveMessage {
+  position:Vec3;
+  velocity:[float];
+  waypoints:[Vec3];
+  player_id:uint;
+  active:bool;
+  visible:bool;
+  ghost:bool;
+  name:string;
+}
+
+root_type MoveMessage;

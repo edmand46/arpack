@@ -58,14 +58,20 @@ func TestGenerateTypeScript_Primitives(t *testing.T) {
 		t.Error("Missing s field")
 	}
 
-	// Check serialize method exists
+	// Check serialize overloads exist
+	if !strings.Contains(code, "serialize(buffer: Uint8Array): number;") {
+		t.Error("Missing Uint8Array serialize overload")
+	}
 	if !strings.Contains(code, "serialize(view: DataView, offset: number): number") {
-		t.Error("Missing serialize method")
+		t.Error("Missing DataView serialize overload")
 	}
 
-	// Check deserialize method exists
+	// Check deserialize overloads exist
+	if !strings.Contains(code, "static deserialize(data: Uint8Array): [PrimitiveMessage, number];") {
+		t.Error("Missing Uint8Array deserialize overload")
+	}
 	if !strings.Contains(code, "static deserialize(view: DataView, offset: number): [PrimitiveMessage, number]") {
-		t.Error("Missing deserialize method")
+		t.Error("Missing DataView deserialize overload")
 	}
 }
 
@@ -375,6 +381,42 @@ func TestGenerateTypeScript_Enums(t *testing.T) {
 	}
 }
 
+func TestGenerateTypeScript_RejectsUint64Enums(t *testing.T) {
+	schema := parser.Schema{
+		Enums: []parser.Enum{
+			{
+				Name:      "Wide",
+				Primitive: parser.KindUint64,
+				Values: []parser.EnumValue{
+					{Name: "Big", Value: "9007199254740993"},
+				},
+			},
+		},
+		Messages: []parser.Message{
+			{
+				PackageName: "test",
+				Name:        "EnumMessage",
+				Fields: []parser.Field{
+					{
+						Name:      "Wide",
+						Kind:      parser.KindPrimitive,
+						Primitive: parser.KindUint64,
+						NamedType: "Wide",
+					},
+				},
+			},
+		},
+	}
+
+	_, err := GenerateTypeScriptSchema(schema)
+	if err == nil {
+		t.Fatal("expected uint64 enum rejection")
+	}
+	if !strings.Contains(err.Error(), "int64/uint64 enum Wide") {
+		t.Fatalf("expected clear uint64 enum error, got %v", err)
+	}
+}
+
 func TestGenerateTypeScript_Strings(t *testing.T) {
 	schema := parser.Schema{
 		Messages: []parser.Message{
@@ -406,6 +448,9 @@ func TestGenerateTypeScript_Strings(t *testing.T) {
 	}
 	if !strings.Contains(code, `arpackEnsureUint16Length(_slen`) {
 		t.Error("Missing string length guard in serialize")
+	}
+	if !strings.Contains(code, `arpackEnsureWritable(view, pos, 2 + _slen`) {
+		t.Error("Missing string write bounds guard in serialize")
 	}
 
 	// Check TextDecoder usage
@@ -480,6 +525,28 @@ func TestGenerateTypeScript_RuntimeGuards(t *testing.T) {
 		Messages: []parser.Message{
 			{
 				PackageName: "test",
+				Name:        "Inner",
+				Fields: []parser.Field{
+					{Name: "Value", Kind: parser.KindPrimitive, Primitive: parser.KindInt32},
+				},
+			},
+			{
+				PackageName: "test",
+				Name:        "Holder",
+				Fields: []parser.Field{
+					{
+						Name:     "Items",
+						Kind:     parser.KindFixedArray,
+						FixedLen: 2,
+						Elem: &parser.Field{
+							Kind:     parser.KindNested,
+							TypeName: "Inner",
+						},
+					},
+				},
+			},
+			{
+				PackageName: "test",
 				Name:        "Guarded",
 				Fields: []parser.Field{
 					{Name: "Name", Kind: parser.KindPrimitive, Primitive: parser.KindString},
@@ -500,7 +567,7 @@ func TestGenerateTypeScript_RuntimeGuards(t *testing.T) {
 	}
 
 	out := runGeneratedTypeScriptProgram(t, src, `
-import { Guarded } from "./messages.gen";
+import { Guarded, Holder, Inner } from "./messages.gen";
 
 function emit(label: string, fn: () => void) {
   try {
@@ -516,25 +583,76 @@ function emit(label: string, fn: () => void) {
 }
 
 emit("TRUNC", () => {
-  Guarded.deserialize(new DataView(new ArrayBuffer(0)), 0);
+  Guarded.deserialize(new Uint8Array(0));
 });
 
 emit("LEN", () => {
   const msg = new Guarded();
   msg.name = "a".repeat(65536);
-  msg.serialize(new DataView(new ArrayBuffer(2)), 0);
+  msg.serialize(new Uint8Array(2));
 });
 
 emit("QUANT", () => {
   const msg = new Guarded();
   msg.ratio = 2;
-  msg.serialize(new DataView(new ArrayBuffer(4)), 0);
+  msg.serialize(new Uint8Array(4));
+});
+
+emit("SLICE", () => {
+  const backing = new Uint8Array(8);
+  backing.fill(0x7f);
+  const before = Array.from(backing).join(",");
+  const msg = new Guarded();
+  msg.name = "abc";
+  try {
+    msg.serialize(new DataView(backing.buffer, 2, 2), 0);
+  } finally {
+    const after = Array.from(backing).join(",");
+    if (after !== before) {
+      throw new Error("backing bytes changed: " + after);
+    }
+  }
+});
+
+emit("UINT8", () => {
+  const msg = new Guarded();
+  msg.name = "ok";
+  msg.ratio = 0.5;
+  const data = new Uint8Array(16);
+  const n = msg.serialize(data);
+  const [decoded, consumed] = Guarded.deserialize(data.subarray(0, n));
+  if (consumed !== n || decoded.name !== "ok") {
+    throw new Error("Uint8Array roundtrip failed");
+  }
+});
+
+emit("DEFAULTS", () => {
+  const holder = new Holder();
+  if (holder.items[0] === holder.items[1]) {
+    throw new Error("shared nested default");
+  }
+  holder.items[0].value = 7;
+  if (holder.items[1].value === 7) {
+    throw new Error("nested default mutation leaked");
+  }
+});
+
+emit("FIXED_SHORT", () => {
+  const holder = new Holder();
+  holder.items = [new Inner()];
+  holder.serialize(new Uint8Array(16));
+});
+
+emit("FIXED_LONG", () => {
+  const holder = new Holder();
+  holder.items = [new Inner(), new Inner(), new Inner()];
+  holder.serialize(new Uint8Array(16));
 });
 `)
 
 	lines := strings.Split(strings.TrimSpace(out), "\n")
-	if len(lines) != 3 {
-		t.Fatalf("expected 3 output lines, got %d: %q", len(lines), out)
+	if len(lines) != 8 {
+		t.Fatalf("expected 8 output lines, got %d: %q", len(lines), out)
 	}
 	if !strings.Contains(lines[0], "RangeError:arpack: buffer too short for string length for Name") {
 		t.Fatalf("expected truncated-input guard, got %q", lines[0])
@@ -544,6 +662,21 @@ emit("QUANT", () => {
 	}
 	if !strings.Contains(lines[2], "RangeError:arpack: quantized value out of range for Ratio") {
 		t.Fatalf("expected quantized range guard, got %q", lines[2])
+	}
+	if !strings.Contains(lines[3], "RangeError:arpack: buffer too short for string data for Name") {
+		t.Fatalf("expected DataView-slice write guard, got %q", lines[3])
+	}
+	if lines[4] != "UINT8:OK" {
+		t.Fatalf("expected Uint8Array roundtrip, got %q", lines[4])
+	}
+	if lines[5] != "DEFAULTS:OK" {
+		t.Fatalf("expected distinct nested fixed-array defaults, got %q", lines[5])
+	}
+	if !strings.Contains(lines[6], "RangeError:arpack: fixed array for Items length mismatch: expected 2, got 1") {
+		t.Fatalf("expected fixed-array short guard, got %q", lines[6])
+	}
+	if !strings.Contains(lines[7], "RangeError:arpack: fixed array for Items length mismatch: expected 2, got 3") {
+		t.Fatalf("expected fixed-array long guard, got %q", lines[7])
 	}
 }
 

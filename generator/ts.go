@@ -40,6 +40,22 @@ func GenerateTypeScriptSchema(schema parser.Schema) ([]byte, error) {
 	b.WriteString("  }\n")
 	b.WriteString("}\n\n")
 
+	b.WriteString("function arpackEnsureWritable(view: DataView, offset: number, needed: number, context: string): void {\n")
+	b.WriteString("  if (offset < 0 || needed < 0 || offset + needed > view.byteLength) {\n")
+	b.WriteString("    const available = Math.max(0, view.byteLength - offset);\n")
+	b.WriteString("    throw new RangeError(\"arpack: buffer too short for \" + context + \": need \" + needed + \" bytes, have \" + available);\n")
+	b.WriteString("  }\n")
+	b.WriteString("}\n\n")
+
+	b.WriteString("function arpackEnsureFixedArray(value: unknown[], expectedLength: number, context: string): void {\n")
+	b.WriteString("  if (!Array.isArray(value)) {\n")
+	b.WriteString("    throw new RangeError(\"arpack: \" + context + \" is not an array; expected length \" + expectedLength);\n")
+	b.WriteString("  }\n")
+	b.WriteString("  if (value.length !== expectedLength) {\n")
+	b.WriteString("    throw new RangeError(\"arpack: \" + context + \" length mismatch: expected \" + expectedLength + \", got \" + value.length);\n")
+	b.WriteString("  }\n")
+	b.WriteString("}\n\n")
+
 	if needsQuantGuards {
 		b.WriteString("function arpackEnsureQuantizedRange(value: number, min: number, max: number, context: string): void {\n")
 		b.WriteString("  if (Number.isNaN(value) || value < min || value > max) {\n")
@@ -50,6 +66,9 @@ func GenerateTypeScriptSchema(schema parser.Schema) ([]byte, error) {
 
 	enumNames := make(map[string]struct{}, len(schema.Enums))
 	for _, enum := range schema.Enums {
+		if enum.Primitive == parser.KindInt64 || enum.Primitive == parser.KindUint64 {
+			return nil, fmt.Errorf("typescript target does not support int64/uint64 enum %s: TypeScript enums are number-based and cannot represent bigint values", enum.Name)
+		}
 		enumNames[enum.Name] = struct{}{}
 	}
 
@@ -91,14 +110,18 @@ func writeTSMessage(b *strings.Builder, msg parser.Message, enumNames map[string
 
 	// Field declarations with defaults
 	for _, f := range msg.Fields {
-		defaultValue := tsDefaultValue(f)
+		defaultValue := tsDefaultValue(f, enumNames)
 		fmt.Fprintf(b, "  %s: %s = %s;\n", toCamelCase(f.Name), tsTypeName(f, enumNames), defaultValue)
 	}
 	b.WriteString("\n")
 
 	// Serialize method
-	b.WriteString("  serialize(view: DataView, offset: number): number {\n")
-	b.WriteString("    let pos = offset;\n")
+	b.WriteString("  serialize(buffer: Uint8Array): number;\n")
+	b.WriteString("  serialize(view: DataView, offset: number): number;\n")
+	b.WriteString("  serialize(target: DataView | Uint8Array, offset?: number): number {\n")
+	b.WriteString("    const view = target instanceof DataView ? target : new DataView(target.buffer, target.byteOffset, target.byteLength);\n")
+	b.WriteString("    let pos = offset ?? 0;\n")
+	b.WriteString("    const start = pos;\n")
 	for i, seg := range segs {
 		if seg.single != nil {
 			if err := writeTSSerializeField(b, "this", *seg.single, "    ", enumNames); err != nil {
@@ -108,12 +131,16 @@ func writeTSMessage(b *strings.Builder, msg parser.Message, enumNames map[string
 			writeTSBoolGroupSerialize(b, "this", seg.bools, i, "    ")
 		}
 	}
-	b.WriteString("    return pos - offset;\n")
+	b.WriteString("    return pos - start;\n")
 	b.WriteString("  }\n\n")
 
 	// Deserialize method
-	fmt.Fprintf(b, "  static deserialize(view: DataView, offset: number): [%s, number] {\n", msg.Name)
-	b.WriteString("    let pos = offset;\n")
+	fmt.Fprintf(b, "  static deserialize(data: Uint8Array): [%s, number];\n", msg.Name)
+	fmt.Fprintf(b, "  static deserialize(view: DataView, offset: number): [%s, number];\n", msg.Name)
+	fmt.Fprintf(b, "  static deserialize(source: DataView | Uint8Array, offset?: number): [%s, number] {\n", msg.Name)
+	b.WriteString("    const view = source instanceof DataView ? source : new DataView(source.buffer, source.byteOffset, source.byteLength);\n")
+	b.WriteString("    let pos = offset ?? 0;\n")
+	b.WriteString("    const start = pos;\n")
 	fmt.Fprintf(b, "    const msg = new %s();\n", msg.Name)
 	for i, seg := range segs {
 		if seg.single != nil {
@@ -124,7 +151,7 @@ func writeTSMessage(b *strings.Builder, msg parser.Message, enumNames map[string
 			writeTSBoolGroupDeserialize(b, "msg", seg.bools, i, "    ")
 		}
 	}
-	b.WriteString("    return [msg, pos - offset];\n")
+	b.WriteString("    return [msg, pos - start];\n")
 	b.WriteString("  }\n")
 
 	b.WriteString("}\n")
@@ -160,6 +187,7 @@ func writeTSSerializeField(b *strings.Builder, recv string, f parser.Field, inde
 		fmt.Fprintf(b, "%spos += %s.serialize(view, pos);\n", indent, access)
 	case parser.KindFixedArray:
 		iVar := "_i" + f.Name
+		fmt.Fprintf(b, "%sarpackEnsureFixedArray(%s, %d, %q);\n", indent, access, f.FixedLen, "fixed array for "+f.Name)
 		fmt.Fprintf(b, "%sfor (let %s = 0; %s < %d; %s++) {\n",
 			indent, iVar, iVar, f.FixedLen, iVar)
 		elemField := parser.Field{
@@ -258,6 +286,7 @@ func writeTSSerializePrimitiveElement(b *strings.Builder, access string, f parse
 		fmt.Fprintf(b, "%sconst %s = arpackTextEncoder.encode(%s);\n", indent, lenVar, valueExpr)
 		fmt.Fprintf(b, "%sconst %s = arpackEnsureUint16Length(%s.length, %q);\n",
 			indent, guardVar, lenVar, lengthContext(f))
+		fmt.Fprintf(b, "%sarpackEnsureWritable(view, pos, 2 + %s.length, %q);\n", indent, lenVar, "string data for "+f.Name)
 		fmt.Fprintf(b, "%sview.setUint16(pos, %s, true);\n", indent, guardVar)
 		fmt.Fprintf(b, "%spos += 2;\n", indent)
 		fmt.Fprintf(b, "%snew Uint8Array(view.buffer, view.byteOffset+pos, %s.length).set(%s);\n", indent, lenVar, lenVar)
@@ -312,6 +341,7 @@ func writeTSSerializePrimitive(b *strings.Builder, access string, f parser.Field
 		fmt.Fprintf(b, "%sconst %s = arpackTextEncoder.encode(%s);\n", indent, lenVar, valueExpr)
 		fmt.Fprintf(b, "%sconst %s = arpackEnsureUint16Length(%s.length, %q);\n",
 			indent, guardVar, lenVar, lengthContext(f))
+		fmt.Fprintf(b, "%sarpackEnsureWritable(view, pos, 2 + %s.length, %q);\n", indent, lenVar, "string data for "+f.Name)
 		fmt.Fprintf(b, "%sview.setUint16(pos, %s, true);\n", indent, guardVar)
 		fmt.Fprintf(b, "%spos += 2;\n", indent)
 		fmt.Fprintf(b, "%snew Uint8Array(view.buffer, view.byteOffset+pos, %s.length).set(%s);\n", indent, lenVar, lenVar)
@@ -633,10 +663,10 @@ func tsPrimitiveTypeName(k parser.PrimitiveKind) string {
 	return "unknown"
 }
 
-func tsDefaultValue(f parser.Field) string {
+func tsDefaultValue(f parser.Field, enumNames map[string]struct{}) string {
 	switch f.Kind {
 	case parser.KindPrimitive:
-		if tsIsEnumType(f, nil) {
+		if tsIsEnumType(f, enumNames) {
 			return "0"
 		}
 		switch f.Primitive {
@@ -653,13 +683,26 @@ func tsDefaultValue(f parser.Field) string {
 	case parser.KindNested:
 		return fmt.Sprintf("new %s()", f.TypeName)
 	case parser.KindFixedArray:
-		elemDefault := tsDefaultValue(*f.Elem)
-		elemType := tsTypeName(*f.Elem, nil)
+		elemDefault := tsDefaultValue(*f.Elem, enumNames)
+		elemType := tsTypeName(*f.Elem, enumNames)
+		if tsDefaultNeedsFactory(*f.Elem) {
+			return fmt.Sprintf("Array.from({ length: %d }, () => %s)", f.FixedLen, elemDefault)
+		}
 		return fmt.Sprintf("new Array<%s>(%d).fill(%s)", elemType, f.FixedLen, elemDefault)
 	case parser.KindSlice:
 		return "[]"
 	}
 	return "undefined"
+}
+
+func tsDefaultNeedsFactory(f parser.Field) bool {
+	switch f.Kind {
+	case parser.KindPrimitive:
+		return false
+	case parser.KindNested, parser.KindFixedArray, parser.KindSlice:
+		return true
+	}
+	return true
 }
 
 func tsSerializeValueExpr(access string, f parser.Field, enumNames map[string]struct{}) string {

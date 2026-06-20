@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="images/logo.png" alt="arpack logo" width="240">
+  <img src="images/logo.png" alt="arpack logo" width="200">
 </p>
 
 # ArPack
@@ -8,311 +8,176 @@
 ![GitHub Tag](https://img.shields.io/github/v/tag/edmand46/arpack)
 ![GitHub License](https://img.shields.io/github/license/edmand46/arpack)
 
+Binary serialization code generator for Go, C#, TypeScript, and Lua.
 
-Binary serialization code generator for Go, C#, TypeScript, and Lua. Define messages once as Go structs — get zero-allocation `Marshal` and low-allocation `Unmarshal` for Go, `unsafe` pointer-based `Serialize`/`Deserialize` for C#, `DataView`-based serialization for TypeScript/browser, and pure Lua implementation for Defold/LuaJIT.
+Define wire messages as Go structs, then generate compact little-endian serializers for every target. ArPack is intentionally narrow: it is built for owned protocols where predictable layout, cross-language compatibility, and low runtime overhead matter more than schema evolution features.
 
-## Features
-
-- **Single source of truth** — define messages in Go, generate code for all four targets
-- **Float quantization** — compress `float32`/`float64` to 8 or 16 bits with a `pack` struct tag
-- **Boolean packing** — consecutive `bool` fields are packed into single bytes (up to 8 per byte)
-- **Enums** — `type Opcode uint16` + `const` block becomes C#/TypeScript enums
-- **Nested types, fixed arrays, slices** — full support for complex message structures
-- **Cross-language binary compatibility** — all four targets produce identical wire formats
-- **Browser support** — TypeScript target uses native DataView API for zero-dependency serialization
-
-## When to use
-
-ArPack is designed for real-time multiplayer games and other latency-sensitive systems where a Go backend talks to a C# client over a binary protocol.
-
-Typical setups:
-
-- **[Nakama](https://heroiclabs.com/nakama/) + Unity** — define all network messages in Go, generate C# structs for Unity. Both sides share the exact same wire format with no reflection or boxing.
-- **Custom Go game server + Unity** — roll your own server without pulling in a serialization framework. ArPack generates plain `Marshal`/`Unmarshal` methods with zero allocations on fixed-size hot paths.
-- **Any Go service + .NET client** — works anywhere you control both ends and want a compact binary protocol without Protobuf's runtime overhead or code-gen complexity.
-- **Go backend + Browser/WebSocket** — generate TypeScript classes for browser-based clients. Uses native DataView API with zero dependencies.
-- **Go backend + Defold/Lua** — generate Lua modules for Defold game engine. Pure Lua implementation compatible with LuaJIT.
-
-## Installation
+## Install
 
 ```bash
 go install github.com/edmand46/arpack/cmd/arpack@latest
 ```
 
-## Usage
+## Generate
 
 ```bash
-# Generate Go + C# + TypeScript
-# (-out-go points at the schema's own package directory — see "Go co-location" below)
-arpack -in messages/messages.go -out-go ./messages -out-cs ../Unity/Assets/Scripts -out-ts ./web/src/messages
-
-# Generate only TypeScript
-arpack -in messages.go -out-ts ./web/src/messages
-
-# Generate only Lua (for Defold)
-arpack -in messages.go -out-lua ./defold/scripts/messages
+arpack \
+  -in messages/messages.go \
+  -out-go messages \
+  -out-cs client/Messages \
+  -out-ts web/src/messages \
+  -out-lua defold/scripts/messages
 ```
 
-| Flag | Description |
-|---|---|
-| `-in` | Input Go file with struct definitions (required) |
-| `-out-go` | Output directory for generated Go code |
-| `-out-cs` | Output directory for generated C# code |
-| `-out-ts` | Output directory for generated TypeScript code |
-| `-out-lua` | Output directory for generated Lua code |
-| `-cs-namespace` | C# namespace (default: `Arpack.Messages`) |
+| Flag | Purpose |
+| --- | --- |
+| `-in` | Input Go schema file |
+| `-out-go` | Generated Go methods, co-located with the schema package |
+| `-out-cs` | Generated C# files |
+| `-out-ts` | Generated TypeScript files |
+| `-out-lua` | Generated Lua files |
+| `-cs-namespace` | C# namespace, default `Arpack.Messages` |
 
-**Output files:**
-- Go: `{name}_gen.go`
-- C#: `{Name}.gen.cs`
-- TypeScript: `{Name}.gen.ts`
-- Lua: `{name}_gen.lua` (snake_case for Lua `require()` compatibility)
+Output names:
 
-## v1 Contract
+| Target | File |
+| --- | --- |
+| Go | `{name}_gen.go` |
+| C# | `{Name}.gen.cs` |
+| TypeScript | `{Name}.gen.ts` |
+| Lua | `{name}_gen.lua` |
 
-ArPack `v1` intentionally supports a narrow schema model:
+## Schema
 
-- Input is a single Go source file.
-- Message types must be defined in that same file.
-- External package types, pointers, and platform-dependent integer aliases (`int`, `uint`, `uintptr`) are not supported.
-- Wire format is stable within `v1.x` for unchanged schemas.
-
-This is a deliberate product boundary for predictable code generation and cross-language compatibility.
-
-**Go co-location:** The generated Go file contains only `Marshal`/`Unmarshal` methods, not the struct definitions. It must compile in the same package as the schema structs. The package name comes from the `-out-go` directory basename, so point `-out-go` at the schema's own package directory (schema in `./messages/messages.go` → `-out-go ./messages`). If the basename is not a valid Go package name (a keyword like `go`, or a name with dots), arpack falls back to the schema's package name. Schemas containing only enums skip the Go target entirely: the enum declarations already live in your schema source.
-
-**Atomic output:** with multiple `-out-*` flags, arpack generates every target in memory first and writes files only if all targets succeed. A failing target (e.g. `int64` with `-out-lua`) leaves nothing partially updated on disk.
-
-## Schema Definition
-
-Messages are defined as Go structs in a single `.go` file:
+Schemas are single Go files. Message structs, nested message structs, enum types, and enum constants must be defined in that file.
 
 ```go
 package messages
 
-// Quantized 3D vector — 6 bytes instead of 12
+type Opcode uint16
+
+const (
+    OpcodeUnknown Opcode = iota
+    OpcodeMove
+)
+
 type Vector3 struct {
     X float32 `pack:"min=-500,max=500,bits=16"`
     Y float32 `pack:"min=-500,max=500,bits=16"`
     Z float32 `pack:"min=-500,max=500,bits=16"`
 }
 
-// Enum
-type Opcode uint16
-
-const (
-    OpcodeUnknown   Opcode = iota
-    OpcodeAuthorize
-    OpcodeJoinRoom
-)
-
 type MoveMessage struct {
-    Position  Vector3    // nested type
-    Velocity  [3]float32 // fixed-length array
-    Waypoints []Vector3  // variable-length slice
-    PlayerID  uint32
-    Active    bool       // 3 consecutive bools →
-    Visible   bool       //   packed into 1 byte
-    Ghost     bool
-    Name      string
+    Op       Opcode
+    PlayerID uint32
+    Position Vector3
+    Velocity [3]float32
+    Trail    []Vector3
+    Active   bool
+    Visible  bool
+    Name     string
 }
 ```
 
-### Supported Types
+Supported field shapes:
 
-| Type | Wire Size | Lua Support |
-|---|---|---|
-| `bool` (packed) | 1 bit (up to 8 per byte) | ✓ (uses BitOp library) |
-| `int8`, `uint8` | 1 byte | ✓ |
-| `int16`, `uint16` | 2 bytes | ✓ |
-| `int32`, `uint32`, `float32` | 4 bytes | ✓ |
-| `int64`, `uint64` | 8 bytes | ✗ (LuaJIT limitation) |
-| `float64` | 8 bytes | ✓ |
-| `string` | 2-byte length prefix + UTF-8 | ✓ |
-| `[N]T` | N × sizeof(T) | ✓ |
-| `[]T` | 2-byte length prefix + N × sizeof(T) | ✓ |
+| Kind | Notes |
+| --- | --- |
+| `bool` | Consecutive bool fields are bit-packed |
+| `int8`/`uint8` through `int64`/`uint64` | Explicit-width integers only; Lua rejects 64-bit integers |
+| `float32`, `float64` | Optional `pack:"min=...,max=...,bits=8|16"` quantization |
+| `string` | UTF-8 bytes with `uint16` length prefix |
+| `[N]T`, `[]T` | Fixed arrays and `uint16`-length slices |
+| named structs and enums | Must be declared in the schema file |
 
-**Note:** platform-dependent `int`, `uint`, and `uintptr` are not supported. Use explicit widths like `int32`, `uint32`, `int64`, or `uint64`.
+Unsupported: external package types, pointers, embedded fields, nested collections, and platform-dependent `int`, `uint`, or `uintptr`.
 
-**Note:** `int64`/`uint64` are not supported in Lua target. LuaJIT (used by Defold) represents numbers as double-precision floats, which can only safely represent integers up to 2^53. Use `int32`/`uint32` instead.
+## Runtime Contract
 
-### Float Quantization
+- Wire format is little-endian.
+- Fields are encoded in declaration order.
+- Strings and slices use `uint16` length prefixes.
+- Enum fields use their declared underlying integer type.
+- Quantized floats fail fast on `NaN` or out-of-range values.
+- Deserializers reject malformed or truncated input.
+- Multi-target generation is staged: a failing target does not partially update earlier outputs.
 
-Use the `pack` struct tag to compress floats:
+Unchanged schemas keep the same wire layout. Field order, field type, enum underlying type, length encoding, bool grouping, and quantization changes are wire-breaking.
 
-```go
-X float32 `pack:"min=-500,max=500,bits=16"`  // 2 bytes instead of 4
-Y float32 `pack:"min=0,max=1,bits=8"`        // 1 byte instead of 4
-```
+## Generated APIs
 
-| Parameter | Description |
-|---|---|
-| `min` | Minimum expected value |
-| `max` | Maximum expected value |
-| `bits` | Target size: `8` (uint8) or `16` (uint16) |
-
-Values are linearly mapped: `encoded = (value - min) / (max - min) * maxUint`.
-
-Quantized values must stay within the declared `[min, max]` range. Generated serializers fail fast on out-of-range or `NaN` inputs instead of silently truncating them.
-
-## Generated Code
-
-### Go
+Go:
 
 ```go
 func (m *MoveMessage) Marshal(buf []byte) []byte
 func (m *MoveMessage) Unmarshal(data []byte) (int, error)
 ```
 
-`Marshal` appends to the buffer and returns it. `Unmarshal` reads from the buffer and returns bytes consumed.
-
-**Failure behavior:** generated `Marshal` panics if a string/slice exceeds the `uint16` wire limit or if a quantized value is outside its declared range. `Unmarshal` returns an error on truncated input.
-
-### C#
+C#:
 
 ```csharp
+public int Serialize(Span<byte> buffer)
+public static int Deserialize(ReadOnlySpan<byte> data, out MoveMessage msg)
+
 public unsafe int Serialize(byte* buffer, int length)
 public static unsafe int Deserialize(byte* buffer, int length, out MoveMessage msg)
 ```
 
-Uses unsafe pointers for zero-copy serialization, with explicit bounds checks in both directions. Returns bytes written/consumed.
-
-**Failure behavior:** generated `Serialize` throws if the destination buffer is too small, if a string/slice exceeds the `uint16` wire limit, or if a quantized value is outside its declared range. `Deserialize` throws on malformed or truncated input.
-
-### TypeScript
+TypeScript:
 
 ```typescript
-export class MoveMessage {
-  position: Vector3 = new Vector3();
-  velocity: number[] = new Array<number>(3).fill(0);
-  waypoints: Vector3[] = [];
-  playerID: number = 0;
-  active: boolean = false;
-  visible: boolean = false;
-  ghost: boolean = false;
-  name: string = "";
+serialize(buffer: Uint8Array): number
+static deserialize(data: Uint8Array): [MoveMessage, number]
 
-  serialize(view: DataView, offset: number): number
-  static deserialize(view: DataView, offset: number): [MoveMessage, number]
-}
+serialize(view: DataView, offset: number): number
+static deserialize(view: DataView, offset: number): [MoveMessage, number]
 ```
 
-Uses native DataView API for browser-compatible serialization with zero dependencies. Returns bytes written/consumed.
-
-**Note:** TypeScript field names are converted to camelCase (e.g., `PlayerID` → `playerID`).
-
-**Failure behavior:** generated `serialize(...)` throws `RangeError` if a string/slice exceeds the `uint16` wire limit or if a quantized value is outside its declared range. `deserialize(...)` throws `RangeError` on malformed or truncated input.
-
-### Lua
+Lua:
 
 ```lua
 local messages = require("messages.messages_gen")
-
--- Create message
-local msg = messages.new_move_message()
-msg.player_id = 123
-msg.active = true
-
--- Serialize
 local data = messages.serialize_move_message(msg)
-
--- Deserialize
-local decoded, bytes_read = messages.deserialize_move_message(data, 1)
+local decoded, bytes_read = messages.deserialize_move_message(data)
 ```
 
-Uses pure Lua with inline helper functions for byte manipulation. Compatible with LuaJIT (Defold). All identifiers use snake_case (e.g., `MoveMessage` → `move_message`, `PlayerID` → `player_id`).
+## Benchmarks
 
-**Requirements:** The generated Lua code requires the [BitOp library](https://bitop.luajit.org/) for bit manipulation. This library is included in LuaJIT (used by Defold).
+Recent Go results on Apple M3 Max:
 
-**Limitations:**
-- Lua target does not support `int64`/`uint64` types. Use `int32`/`uint32` instead. This is because LuaJIT represents numbers as double-precision floats, which can only safely represent integers up to 2^53.
-- Variable-length fields use `uint16` length prefixes, so `string` byte length and `[]T` element count must not exceed `65535`. Serialization raises an error if the limit is exceeded.
-- Quantized values must stay within the declared `[min, max]` range. Serialization raises a Lua error on out-of-range or `NaN` inputs.
-- Deserialization raises Lua errors on malformed or truncated input. If you need a recoverable boundary, wrap decode calls in `pcall(...)`.
-- Generated file uses snake_case naming (e.g., `messages_gen.lua`) for proper Lua `require()` resolution.
-
-## Wire Format
-
-- Little-endian byte order
-- No message framing — fields are written in declaration order
-- Variable-length fields (`string`, `[]T`) prefixed with `uint16` length
-- Booleans packed as bitfields (LSB first, up to 8 per byte)
-- Quantized floats stored as `uint8` or `uint16`
-
-## Compatibility Guarantees
-
-Within `v1.x`, the following are considered compatibility guarantees for a fixed schema:
-
-- Same field declaration order produces the same wire layout.
-- All four generators produce identical wire bytes for supported types.
-- `string` and `[]T` always use `uint16` length prefixes.
-- Consecutive `bool` fields are bit-packed in declaration order, least-significant bit first.
-- Enum fields use their declared underlying integer type on the wire.
-
-The following are breaking changes:
-
-- changing field order
-- changing a field type
-- changing quantization parameters
-- changing enum underlying types
-- changing how booleans are grouped or how lengths are encoded
-
-## Benchmarks 
-
-### Go Results (M3 Max)
-```
-BenchmarkArPack_Marshal-16         83912905   14.1 ns/op    3406 MB/s    0 B/op    0 allocs/op
-BenchmarkArPack_Unmarshal-16       35124906   33.7 ns/op    1426 MB/s   40 B/op    2 allocs/op
-BenchmarkProto_Marshal-16           7202112  166.7 ns/op     408 MB/s    0 B/op    0 allocs/op
-BenchmarkProto_Unmarshal-16         4653706  258.0 ns/op     264 MB/s  248 B/op    7 allocs/op
-BenchmarkFlatBuffers_Marshal-16     5282973  228.9 ns/op     664 MB/s    0 B/op    0 allocs/op
-BenchmarkFlatBuffers_Unmarshal-16  18426291   65.3 ns/op    2327 MB/s   24 B/op    1 allocs/op
+```text
+BenchmarkArPack_Marshal-16             9.35-9.54 ns/op     0 B/op    0 allocs/op
+BenchmarkArPack_Unmarshal-16          21.04-21.75 ns/op   16 B/op    1 allocs/op
+BenchmarkProto_Marshal-16            170.9-175.1 ns/op     0 B/op    0 allocs/op
+BenchmarkProto_Unmarshal-16          264.1-280.8 ns/op   248 B/op    7 allocs/op
+BenchmarkFlatBuffers_Marshal-16      141.9-145.8 ns/op     0 B/op    0 allocs/op
+BenchmarkFlatBuffers_Unmarshal-16     40.94-41.51 ns/op   24 B/op    1 allocs/op
 ```
 
-| Format | Size |
-|---|---|
-| ArPack | 48 bytes |
+These results use a full-float sample schema for all formats. Marshal benchmarks reuse caller-owned buffers/builders where the library supports it. Unmarshal benchmarks materialize the decoded message into Go structs for a comparable consumer-facing result. The FlatBuffers baseline is a hand-written encoding using the FlatBuffers Go runtime with inline `struct Vec3` values.
+
+| Format | Encoded size |
+| --- | ---: |
+| ArPack | 66 bytes |
 | Protobuf | 68 bytes |
-| FlatBuffers | 152 bytes |
+| FlatBuffers | 120 bytes |
+
+Run locally:
 
 ```bash
-go test ./benchmarks/... -bench=. -benchmem
+make bench-stats
 ```
 
-### Unity Mono (M3 Max)
-
-```
-ArPack Serialize:           96.7 ns/op |    0 B/op
-ArPack Deserialize:        205.4 ns/op |    0 B/op
-Proto Serialize (alloc):   930.2 ns/op |    0 B/op
-Proto Deserialize (alloc): 1621.2 ns/op |   29 B/op
-Proto Serialize (reuse):   652.7 ns/op |    0 B/op
-```
-
-ArPack serialize is ~10× faster than Protobuf in Unity. Protobuf deserialize allocates on every call — a GC pressure source in hot game loops. ArPack deserialize is zero-alloc.
+## Development
 
 ```bash
-make gen-unity
-# then attach BenchmarkRunner to any GameObject in SampleScene and press Play
-```
-
-## Running Tests
-
-```bash
-# Full test suite
 make test
-
-# Benchmarks
-go test ./benchmarks/... -bench=. -benchmem
+make bench
+make size
 ```
 
-## Troubleshooting
+Regenerate checked-in benchmark code:
 
-- `unknown type "..."`
-  The field type is not a supported primitive and is not defined in the same schema file.
-- `external package types not supported`
-  Copy the wire-facing type definition into the schema file instead of referencing another package.
-- `... exceeds uint16 limit`
-  A `string` encoded to more than `65535` bytes, or a slice contains more than `65535` elements.
-- `quantized value out of range`
-  The runtime value does not satisfy the declared `pack:"min=...,max=..."` bounds.
+```bash
+make generate
+```

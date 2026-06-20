@@ -74,11 +74,15 @@ jobs:
 
     - name: Test code generation
       run: |
-        go run ./cmd/arpack -in testdata/sample.go -out-go /tmp/gen-go -out-ts /tmp/gen-ts
+        codegen_tmp="$(mktemp -d)"
+        mkdir -p "$codegen_tmp/messages"
+        cp testdata/sample.go "$codegen_tmp/messages/sample.go"
+        go run ./cmd/arpack -in "$codegen_tmp/messages/sample.go" -out-go "$codegen_tmp/messages" -out-ts "$codegen_tmp/gen-ts"
         go run ./cmd/arpack -in testdata/lua/sample.go -out-lua /tmp/gen-lua
-        test -f /tmp/gen-go/sample_gen.go
-        test -f /tmp/gen-ts/Sample.gen.ts
+        test -f "$codegen_tmp/messages/sample_gen.go"
+        test -f "$codegen_tmp/gen-ts/Sample.gen.ts"
         test -f /tmp/gen-lua/sample_gen.lua
+        (cd "$codegen_tmp" && go mod init arpack_codegen_smoke && go test ./...)
 
   e2e:
     runs-on: ubuntu-latest

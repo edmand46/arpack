@@ -47,6 +47,9 @@ func TestGenerateLua_BasicTypes(t *testing.T) {
 	if !strings.Contains(luaStr, "function M.deserialize_basic_types(data, offset)") {
 		t.Error("Missing deserializer for BasicTypes")
 	}
+	if !strings.Contains(luaStr, "offset = offset or 1") {
+		t.Error("Missing default offset in deserializer")
+	}
 
 	if !strings.Contains(luaStr, "int8_field = 0") {
 		t.Error("Missing int8_field in constructor")
@@ -250,6 +253,52 @@ func TestGenerateLua_BoolPacking(t *testing.T) {
 	}
 	if !strings.Contains(luaStr, "msg.a = bit.band(_bool_byte_0, 1) ~= 0") {
 		t.Error("Missing bit.band for bool deserialization")
+	}
+}
+
+func TestGenerateLua_LuaKeywordFieldNames(t *testing.T) {
+	schema := parser.Schema{
+		Messages: []parser.Message{
+			{
+				Name: "KeywordFields",
+				Fields: []parser.Field{
+					{Name: "End", Kind: parser.KindPrimitive, Primitive: parser.KindUint8},
+					{Name: "Local", Kind: parser.KindPrimitive, Primitive: parser.KindString},
+					{Name: "Function", Kind: parser.KindPrimitive, Primitive: parser.KindBool},
+					{Name: "Break", Kind: parser.KindPrimitive, Primitive: parser.KindBool},
+				},
+			},
+		},
+	}
+
+	lua, err := GenerateLuaSchema(schema, "test")
+	if err != nil {
+		t.Fatalf("GenerateLuaSchema failed: %v", err)
+	}
+
+	luaStr := string(lua)
+
+	required := []string{
+		`["end"] = 0`,
+		`["local"] = ''`,
+		`["function"] = false`,
+		`part_idx = part_idx + 1; parts[part_idx] = write_u8(msg["end"])`,
+		`part_idx = part_idx + 1; parts[part_idx] = write_string(msg["local"] or '')`,
+		`if msg["function"] then _bool_byte_2 = bit.bor(_bool_byte_2, 1) end`,
+		`if msg["break"] then _bool_byte_2 = bit.bor(_bool_byte_2, 2) end`,
+		`msg["function"] = bit.band(_bool_byte_2, 1) ~= 0`,
+		`msg["break"] = bit.band(_bool_byte_2, 2) ~= 0`,
+	}
+	for _, want := range required {
+		if !strings.Contains(luaStr, want) {
+			t.Fatalf("generated Lua missing %q\n%s", want, luaStr)
+		}
+	}
+
+	for _, invalid := range []string{"msg.end", "msg.local", "msg.function", "msg.break"} {
+		if strings.Contains(luaStr, invalid) {
+			t.Fatalf("generated Lua contains invalid keyword field access %q\n%s", invalid, luaStr)
+		}
 	}
 }
 

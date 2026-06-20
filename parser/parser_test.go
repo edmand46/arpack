@@ -217,6 +217,93 @@ func TestParseSchemaSource_Enums(t *testing.T) {
 	}
 }
 
+func TestParseSchemaSource_TransitiveAliasPrimitiveAndEnum(t *testing.T) {
+	src := `package messages
+
+type ID uint32
+type PlayerID ID
+
+const (
+	PlayerUnknown PlayerID = iota
+	PlayerOne
+)
+
+type PlayerMessage struct {
+	Player PlayerID
+}
+`
+	schema, err := ParseSchemaSource(src)
+	if err != nil {
+		t.Fatalf("ParseSchemaSource: %v", err)
+	}
+
+	if len(schema.Messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(schema.Messages))
+	}
+	field := schema.Messages[0].Fields[0]
+	if field.Name != "Player" {
+		t.Fatalf("expected field Player, got %s", field.Name)
+	}
+	if field.Kind != KindPrimitive {
+		t.Fatalf("expected Player to be primitive, got %d", field.Kind)
+	}
+	if field.NamedType != "PlayerID" {
+		t.Fatalf("expected named type PlayerID, got %q", field.NamedType)
+	}
+	if field.Primitive != KindUint32 {
+		t.Fatalf("expected PlayerID underlying uint32, got %d", field.Primitive)
+	}
+
+	var enum *Enum
+	for i := range schema.Enums {
+		if schema.Enums[i].Name == "PlayerID" {
+			enum = &schema.Enums[i]
+			break
+		}
+	}
+	if enum == nil {
+		t.Fatal("expected PlayerID enum to be detected")
+	}
+	if enum.Primitive != KindUint32 {
+		t.Fatalf("expected PlayerID enum primitive uint32, got %d", enum.Primitive)
+	}
+	if len(enum.Values) != 2 {
+		t.Fatalf("expected 2 PlayerID enum values, got %d", len(enum.Values))
+	}
+	if enum.Values[1].Name != "PlayerOne" || enum.Values[1].Value != "1" {
+		t.Fatalf("unexpected enum value %#v", enum.Values[1])
+	}
+}
+
+func TestParseSource_ConstArrayLength(t *testing.T) {
+	src := `package messages
+
+const PositionComponents = 3
+
+type MoveMessage struct {
+	Velocity [PositionComponents]float32
+}
+`
+	msgs, err := ParseSource(src)
+	if err != nil {
+		t.Fatalf("ParseSource: %v", err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(msgs))
+	}
+
+	field := msgs[0].Fields[0]
+	if field.Kind != KindFixedArray {
+		t.Fatalf("expected Velocity to be fixed array, got %d", field.Kind)
+	}
+	if field.FixedLen != 3 {
+		t.Fatalf("expected Velocity length 3, got %d", field.FixedLen)
+	}
+	if field.Elem == nil || field.Elem.Kind != KindPrimitive || field.Elem.Primitive != KindFloat32 {
+		t.Fatalf("expected float32 array element, got %#v", field.Elem)
+	}
+}
+
 func TestQuantTag_Errors(t *testing.T) {
 	cases := []struct {
 		src     string

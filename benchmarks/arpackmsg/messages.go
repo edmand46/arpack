@@ -1,9 +1,9 @@
 package arpackmsg
 
 type Vector3 struct {
-	X float32 `pack:"min=-500,max=500,bits=16"`
-	Y float32 `pack:"min=-500,max=500,bits=16"`
-	Z float32 `pack:"min=-500,max=500,bits=16"`
+	X float32
+	Y float32
+	Z float32
 }
 
 type Opcode uint16

@@ -3,6 +3,7 @@ package parser
 import (
 	"fmt"
 	"go/ast"
+	"go/constant"
 	"go/importer"
 	goparser "go/parser"
 	"go/token"
@@ -57,6 +58,7 @@ func parseASTFile(fset *token.FileSet, f *ast.File) (Schema, error) {
 	namedPrimitives := map[string]PrimitiveKind{}
 	unsupportedNamedPrimitives := map[string]string{}
 	unresolvedNamedPrimitives := map[string]string{}
+	var unresolvedOrder []string
 	var enumOrder []string
 
 	for _, decl := range f.Decls {
@@ -83,6 +85,7 @@ func parseASTFile(fset *token.FileSet, f *ast.File) (Schema, error) {
 				primKind, isPrimitive := goPrimitiveKind(t.Name)
 				if !isPrimitive {
 					unresolvedNamedPrimitives[typeSpec.Name.Name] = t.Name
+					unresolvedOrder = append(unresolvedOrder, typeSpec.Name.Name)
 					continue
 				}
 				namedPrimitives[typeSpec.Name.Name] = primKind
@@ -95,12 +98,26 @@ func parseASTFile(fset *token.FileSet, f *ast.File) (Schema, error) {
 
 	for changed := true; changed; {
 		changed = false
-		for name, target := range unresolvedNamedPrimitives {
+		for _, name := range unresolvedOrder {
+			target, unresolved := unresolvedNamedPrimitives[name]
+			if !unresolved {
+				continue
+			}
+			if primKind, ok := namedPrimitives[target]; ok {
+				namedPrimitives[name] = primKind
+				if IsIntegralPrimitive(primKind) {
+					enumOrder = append(enumOrder, name)
+				}
+				delete(unresolvedNamedPrimitives, name)
+				changed = true
+				continue
+			}
 			if _, ok := unsupportedNamedPrimitives[name]; ok {
 				continue
 			}
 			if baseType, ok := unsupportedNamedPrimitives[target]; ok {
 				unsupportedNamedPrimitives[name] = baseType
+				delete(unresolvedNamedPrimitives, name)
 				changed = true
 			}
 		}
@@ -147,6 +164,7 @@ func parseASTFile(fset *token.FileSet, f *ast.File) (Schema, error) {
 					knownStructs,
 					namedPrimitives,
 					unsupportedNamedPrimitives,
+					info,
 				)
 				if err != nil {
 					return Schema{}, fmt.Errorf("struct %s: %w", typeSpec.Name.Name, err)
@@ -164,7 +182,8 @@ func parseASTFile(fset *token.FileSet, f *ast.File) (Schema, error) {
 
 func typeCheckFile(fset *token.FileSet, f *ast.File) (*types.Info, error) {
 	info := &types.Info{
-		Defs: make(map[*ast.Ident]types.Object),
+		Defs:  make(map[*ast.Ident]types.Object),
+		Types: make(map[ast.Expr]types.TypeAndValue),
 	}
 
 	cfg := &types.Config{
@@ -216,6 +235,7 @@ func parseStruct(
 	knownStructs map[string]bool,
 	namedPrimitives map[string]PrimitiveKind,
 	unsupportedNamedPrimitives map[string]string,
+	info *types.Info,
 ) (Message, error) {
 	msg := Message{PackageName: pkg, Name: name}
 
@@ -238,6 +258,7 @@ func parseStruct(
 				knownStructs,
 				namedPrimitives,
 				unsupportedNamedPrimitives,
+				info,
 			)
 			if err != nil {
 				return Message{}, fmt.Errorf("field %s: %w", fieldName.Name, err)
@@ -257,6 +278,7 @@ func parseFieldType(
 	knownStructs map[string]bool,
 	namedPrimitives map[string]PrimitiveKind,
 	unsupportedNamedPrimitives map[string]string,
+	info *types.Info,
 ) (Field, error) {
 	switch t := expr.(type) {
 	case *ast.Ident:
@@ -271,7 +293,7 @@ func parseFieldType(
 
 	case *ast.ArrayType:
 		if t.Len == nil {
-			elem, err := parseFieldType("", t.Elt, rawTag, knownStructs, namedPrimitives, unsupportedNamedPrimitives)
+			elem, err := parseFieldType("", t.Elt, rawTag, knownStructs, namedPrimitives, unsupportedNamedPrimitives, info)
 			if err != nil {
 				return Field{}, fmt.Errorf("slice element: %w", err)
 			}
@@ -285,12 +307,12 @@ func parseFieldType(
 			}, nil
 		}
 
-		n, err := parseArrayLen(t.Len)
+		n, err := parseArrayLen(t.Len, info)
 		if err != nil {
 			return Field{}, fmt.Errorf("array length: %w", err)
 		}
 
-		elem, err := parseFieldType("", t.Elt, rawTag, knownStructs, namedPrimitives, unsupportedNamedPrimitives)
+		elem, err := parseFieldType("", t.Elt, rawTag, knownStructs, namedPrimitives, unsupportedNamedPrimitives, info)
 		if err != nil {
 			return Field{}, fmt.Errorf("array element: %w", err)
 		}
@@ -427,17 +449,24 @@ func parseQuantTag(tag string) (*QuantInfo, error) {
 	return info, nil
 }
 
-func parseArrayLen(expr ast.Expr) (int, error) {
+func parseArrayLen(expr ast.Expr, info *types.Info) (int, error) {
+	if tv, ok := info.Types[expr]; ok && tv.Value != nil {
+		n, ok := constant.Int64Val(tv.Value)
+		if !ok || n <= 0 || int64(int(n)) != n {
+			return 0, fmt.Errorf("array length must be a positive integer, got %q", tv.Value.String())
+		}
+		return int(n), nil
+	}
+
 	lit, ok := expr.(*ast.BasicLit)
 	if !ok {
-		return 0, fmt.Errorf("array length must be a literal integer constant")
+		return 0, fmt.Errorf("array length must be an integer constant")
 	}
 
 	n, err := strconv.Atoi(lit.Value)
 	if err != nil || n <= 0 {
 		return 0, fmt.Errorf("array length must be a positive integer, got %q", lit.Value)
 	}
-
 	return n, nil
 }
 

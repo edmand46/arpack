@@ -2,6 +2,9 @@ package bench_test
 
 import (
 	"fmt"
+	"math"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/edmand46/arpack/benchmarks/arpackmsg"
@@ -82,7 +85,10 @@ func TestMessageSize(t *testing.T) {
 	if _, err := apOut.Unmarshal(apBuf); err != nil {
 		t.Fatalf("ArPack Unmarshal: %v", err)
 	}
-	if apOut.PlayerID != 999 || apOut.Name != "PlayerOne" {
+	if apOut.PlayerID != 999 || apOut.Name != "PlayerOne" ||
+		!apOut.Active || apOut.Visible || !apOut.Ghost ||
+		len(apOut.Waypoints) != 2 || apOut.Velocity != [3]float32{1.5, -2.5, 0} ||
+		math.Abs(float64(apOut.Position.X-100)) > 0.02 {
 		t.Errorf("ArPack round-trip mismatch: %+v", apOut)
 	}
 
@@ -90,14 +96,37 @@ func TestMessageSize(t *testing.T) {
 	if err := proto.Unmarshal(pbBuf, &pbOut); err != nil {
 		t.Fatalf("proto.Unmarshal: %v", err)
 	}
-	if pbOut.PlayerId != 999 || pbOut.Name != "PlayerOne" {
-		t.Errorf("Proto round-trip mismatch: PlayerId=%d Name=%s", pbOut.PlayerId, pbOut.Name)
+	if pbOut.PlayerId != 999 || pbOut.Name != "PlayerOne" ||
+		!pbOut.Active || pbOut.Visible || !pbOut.Ghost ||
+		len(pbOut.Waypoints) != 2 || len(pbOut.Velocity) != 3 ||
+		pbOut.Position == nil || pbOut.Position.X != 100 {
+		t.Errorf("Proto round-trip mismatch: %+v", pbOut)
 	}
 
 	var fbOut benchfbs.MoveMsg
 	benchfbs.Unmarshal(fbBuf, &fbOut)
-	if fbOut.PlayerID != 999 || fbOut.Name != "PlayerOne" {
+	if fbOut.PlayerID != 999 || fbOut.Name != "PlayerOne" ||
+		!fbOut.Active || fbOut.Visible || !fbOut.Ghost ||
+		len(fbOut.Waypoints) != 2 || fbOut.Velocity != [3]float32{1.5, -2.5, 0} ||
+		fbOut.Position.X != 100 || fbOut.Position.Y != -50 || fbOut.Waypoints[1].Z != 100 {
 		t.Errorf("FlatBuffers round-trip mismatch: %+v", fbOut)
+	}
+}
+
+func TestFlatBuffersReferenceSchemaUsesInlineVec3(t *testing.T) {
+	src, err := os.ReadFile("flatbuffers/move.fbs")
+	if err != nil {
+		t.Fatalf("read FlatBuffers schema: %v", err)
+	}
+	text := string(src)
+	if !strings.Contains(text, "struct Vec3") {
+		t.Fatalf("FlatBuffers benchmark schema must keep Vec3 as an inline struct:\n%s", text)
+	}
+	if strings.Contains(text, "table Vec3") {
+		t.Fatalf("FlatBuffers benchmark schema must not encode Vec3 as a table:\n%s", text)
+	}
+	if !strings.Contains(text, "waypoints:[Vec3]") {
+		t.Fatalf("FlatBuffers benchmark schema must keep waypoint elements as Vec3 structs:\n%s", text)
 	}
 }
 

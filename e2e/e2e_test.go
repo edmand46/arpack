@@ -459,22 +459,31 @@ func TestE2E_TruncatedInput(t *testing.T) {
 	types := []string{"Vector3", "SpawnMessage", "MoveMessage", "EnvelopeMessage"}
 
 	t.Run("Go/truncated", func(t *testing.T) {
-		// Go harness deserialize doesn't propagate errors to exit code,
-		// so we check that zero/empty input results in zero/default values
-		for _, typ := range types {
-			out, _ := exec.Command(filepath.Join(goDir, "harness"), "deser", typ, "").CombinedOutput()
-			kv := parseKV(string(out))
-			switch typ {
-			case "Vector3":
-				if kv["X"] != "0" && kv["X"] != "+0" && kv["X"] != "-0" && kv["X"] != "0e+00" {
-					t.Logf("%s: output=%s", typ, out)
+		t.Run("Go/empty", func(t *testing.T) {
+			for _, typ := range types {
+				out, err := exec.Command(filepath.Join(goDir, "harness"), "deser", typ, "").CombinedOutput()
+				if err == nil {
+					t.Errorf("%s: expected error for empty input, got output: %s", typ, out)
+					continue
 				}
-			case "EnvelopeMessage":
-				if kv["Code"] != "0" {
-					t.Logf("%s: output=%s", typ, out)
+				if !bytes.Contains(out, []byte("unmarshal:")) {
+					t.Errorf("%s: expected generated Unmarshal error, got: %s", typ, out)
 				}
 			}
-		}
+		})
+
+		t.Run("Go/truncated_1byte", func(t *testing.T) {
+			for _, typ := range types {
+				out, err := exec.Command(filepath.Join(goDir, "harness"), "deser", typ, "00").CombinedOutput()
+				if err == nil {
+					t.Errorf("%s: expected error for 1-byte input, got output: %s", typ, out)
+					continue
+				}
+				if !bytes.Contains(out, []byte("unmarshal:")) {
+					t.Errorf("%s: expected generated Unmarshal error, got: %s", typ, out)
+				}
+			}
+		})
 	})
 	t.Run("CS", func(t *testing.T) {
 		if _, err := exec.LookPath("dotnet"); err != nil {
@@ -830,6 +839,22 @@ import (
 	"strings"
 )
 
+func mustDecodeHex(s string) []byte {
+	data, err := hex.DecodeString(strings.TrimSpace(s))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "decode hex: %v\n", err)
+		os.Exit(1)
+	}
+	return data
+}
+
+func mustUnmarshal(_ int, err error) {
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "unmarshal: %v\n", err)
+		os.Exit(1)
+	}
+}
+
 func main() {
 	op  := os.Args[1] // ser | deser
 	typ := os.Args[2] // Vector3 | SpawnMessage | ...
@@ -841,9 +866,9 @@ func main() {
 		fmt.Println(hex.EncodeToString(v.Marshal(nil)))
 
 	case "deser:Vector3":
-		data, _ := hex.DecodeString(strings.TrimSpace(os.Args[3]))
+		data := mustDecodeHex(os.Args[3])
 		var v Vector3
-		v.Unmarshal(data)
+		mustUnmarshal(v.Unmarshal(data))
 		fmt.Printf("X=%v\nY=%v\nZ=%v\n", v.X, v.Y, v.Z)
 
 	case "ser:SpawnMessage":
@@ -857,9 +882,9 @@ func main() {
 		fmt.Println(hex.EncodeToString(msg.Marshal(nil)))
 
 	case "deser:SpawnMessage":
-		data, _ := hex.DecodeString(strings.TrimSpace(os.Args[3]))
+		data := mustDecodeHex(os.Args[3])
 		var msg SpawnMessage
-		msg.Unmarshal(data)
+		mustUnmarshal(msg.Unmarshal(data))
 		fmt.Printf("EntityID=%d\n", msg.EntityID)
 		fmt.Printf("Position.X=%v\n", msg.Position.X)
 		fmt.Printf("Position.Y=%v\n", msg.Position.Y)
@@ -886,9 +911,9 @@ func main() {
 		fmt.Println(hex.EncodeToString(msg.Marshal(nil)))
 
 	case "deser:MoveMessage":
-		data, _ := hex.DecodeString(strings.TrimSpace(os.Args[3]))
+		data := mustDecodeHex(os.Args[3])
 		var msg MoveMessage
-		msg.Unmarshal(data)
+		mustUnmarshal(msg.Unmarshal(data))
 		fmt.Printf("PlayerID=%d\n", msg.PlayerID)
 		fmt.Printf("Active=%v\n", msg.Active)
 		fmt.Printf("Visible=%v\n", msg.Visible)
@@ -903,9 +928,9 @@ func main() {
 		fmt.Println(hex.EncodeToString(msg.Marshal(nil)))
 
 	case "deser:EnvelopeMessage":
-		data, _ := hex.DecodeString(strings.TrimSpace(os.Args[3]))
+		data := mustDecodeHex(os.Args[3])
 		var msg EnvelopeMessage
-		msg.Unmarshal(data)
+		mustUnmarshal(msg.Unmarshal(data))
 		fmt.Printf("Code=%d\n", msg.Code)
 		fmt.Printf("Counter=%d\n", msg.Counter)
 
@@ -921,9 +946,9 @@ func main() {
 		fmt.Println(hex.EncodeToString(msg.Marshal(nil)))
 
 	case "deser:QuantTestMessage":
-		data, _ := hex.DecodeString(strings.TrimSpace(os.Args[3]))
+		data := mustDecodeHex(os.Args[3])
 		var msg QuantTestMessage
-		msg.Unmarshal(data)
+		mustUnmarshal(msg.Unmarshal(data))
 		fmt.Printf("DivergenceVal=%v\n", msg.DivergenceVal)
 		fmt.Printf("ZeroVal=%v\n", msg.ZeroVal)
 		fmt.Printf("MaxBoundVal=%v\n", msg.MaxBoundVal)
@@ -994,23 +1019,17 @@ unsafe class Program
     {
         var msg = new Vector3 { X = 123.45f, Y = -200.0f, Z = 0.0f };
         byte[] buf = new byte[64];
-        fixed (byte* ptr = buf)
-        {
-            int n = msg.Serialize(ptr, buf.Length);
-            Console.WriteLine(Convert.ToHexString(buf, 0, n).ToLower());
-        }
+        int n = msg.Serialize(buf);
+        Console.WriteLine(Convert.ToHexString(buf, 0, n).ToLower());
     }
 
     static unsafe void DeserVector3(string hexStr)
     {
         byte[] data = Convert.FromHexString(hexStr);
-        fixed (byte* ptr = data)
-        {
-            Vector3.Deserialize(ptr, data.Length, out Vector3 msg);
-            Console.WriteLine($"X={msg.X:G9}");
-            Console.WriteLine($"Y={msg.Y:G9}");
-            Console.WriteLine($"Z={msg.Z:G9}");
-        }
+        Vector3.Deserialize(data, out Vector3 msg);
+        Console.WriteLine($"X={msg.X:G9}");
+        Console.WriteLine($"Y={msg.Y:G9}");
+        Console.WriteLine($"Z={msg.Z:G9}");
     }
 
     static unsafe void SerSpawnMessage()
@@ -1024,31 +1043,25 @@ unsafe class Program
             Data     = new byte[] { 1, 2, 3 },
         };
         byte[] buf = new byte[512];
-        fixed (byte* ptr = buf)
-        {
-            int n = msg.Serialize(ptr, buf.Length);
-            Console.WriteLine(Convert.ToHexString(buf, 0, n).ToLower());
-        }
+        int n = msg.Serialize(buf);
+        Console.WriteLine(Convert.ToHexString(buf, 0, n).ToLower());
     }
 
     static unsafe void DeserSpawnMessage(string hexStr)
     {
         byte[] data = Convert.FromHexString(hexStr);
-        fixed (byte* ptr = data)
-        {
-            SpawnMessage.Deserialize(ptr, data.Length, out SpawnMessage msg);
-            Console.WriteLine($"EntityID={msg.EntityID}");
-            Console.WriteLine($"Position.X={msg.Position.X:G9}");
-            Console.WriteLine($"Position.Y={msg.Position.Y:G9}");
-            Console.WriteLine($"Position.Z={msg.Position.Z:G9}");
-            Console.WriteLine($"Health={msg.Health}");
-            if (msg.Tags != null)
-                for (int i = 0; i < msg.Tags.Length; i++)
-                    Console.WriteLine($"Tags[{i}]={msg.Tags[i]}");
-            if (msg.Data != null)
-                for (int i = 0; i < msg.Data.Length; i++)
-                    Console.WriteLine($"Data[{i}]={msg.Data[i]}");
-        }
+        SpawnMessage.Deserialize(data, out SpawnMessage msg);
+        Console.WriteLine($"EntityID={msg.EntityID}");
+        Console.WriteLine($"Position.X={msg.Position.X:G9}");
+        Console.WriteLine($"Position.Y={msg.Position.Y:G9}");
+        Console.WriteLine($"Position.Z={msg.Position.Z:G9}");
+        Console.WriteLine($"Health={msg.Health}");
+        if (msg.Tags != null)
+            for (int i = 0; i < msg.Tags.Length; i++)
+                Console.WriteLine($"Tags[{i}]={msg.Tags[i]}");
+        if (msg.Data != null)
+            for (int i = 0; i < msg.Data.Length; i++)
+                Console.WriteLine($"Data[{i}]={msg.Data[i]}");
     }
 
     static unsafe void SerMoveMessage()
@@ -1065,25 +1078,19 @@ unsafe class Program
             Name      = "TestPlayer",
         };
         byte[] buf = new byte[512];
-        fixed (byte* ptr = buf)
-        {
-            int n = msg.Serialize(ptr, buf.Length);
-            Console.WriteLine(Convert.ToHexString(buf, 0, n).ToLower());
-        }
+        int n = msg.Serialize(buf);
+        Console.WriteLine(Convert.ToHexString(buf, 0, n).ToLower());
     }
 
     static unsafe void DeserMoveMessage(string hexStr)
     {
         byte[] data = Convert.FromHexString(hexStr);
-        fixed (byte* ptr = data)
-        {
-            MoveMessage.Deserialize(ptr, data.Length, out MoveMessage msg);
-            Console.WriteLine($"PlayerID={msg.PlayerID}");
-            Console.WriteLine($"Active={msg.Active.ToString().ToLower()}");
-            Console.WriteLine($"Visible={msg.Visible.ToString().ToLower()}");
-            Console.WriteLine($"Ghost={msg.Ghost.ToString().ToLower()}");
-            Console.WriteLine($"Name={msg.Name}");
-        }
+        MoveMessage.Deserialize(data, out MoveMessage msg);
+        Console.WriteLine($"PlayerID={msg.PlayerID}");
+        Console.WriteLine($"Active={msg.Active.ToString().ToLower()}");
+        Console.WriteLine($"Visible={msg.Visible.ToString().ToLower()}");
+        Console.WriteLine($"Ghost={msg.Ghost.ToString().ToLower()}");
+        Console.WriteLine($"Name={msg.Name}");
     }
 
     static unsafe void SerEnvelopeMessage()
@@ -1094,22 +1101,16 @@ unsafe class Program
             Counter = 7,
         };
         byte[] buf = new byte[64];
-        fixed (byte* ptr = buf)
-        {
-            int n = msg.Serialize(ptr, buf.Length);
-            Console.WriteLine(Convert.ToHexString(buf, 0, n).ToLower());
-        }
+        int n = msg.Serialize(buf);
+        Console.WriteLine(Convert.ToHexString(buf, 0, n).ToLower());
     }
 
     static unsafe void DeserEnvelopeMessage(string hexStr)
     {
         byte[] data = Convert.FromHexString(hexStr);
-        fixed (byte* ptr = data)
-        {
-            EnvelopeMessage.Deserialize(ptr, data.Length, out EnvelopeMessage msg);
-            Console.WriteLine($"Code={(ushort)msg.Code}");
-            Console.WriteLine($"Counter={msg.Counter}");
-        }
+        EnvelopeMessage.Deserialize(data, out EnvelopeMessage msg);
+        Console.WriteLine($"Code={(ushort)msg.Code}");
+        Console.WriteLine($"Counter={msg.Counter}");
     }
 
     static unsafe void SerQuantTestMessage()
@@ -1124,26 +1125,20 @@ unsafe class Program
             NearHighVal = 499.999,
         };
         byte[] buf = new byte[64];
-        fixed (byte* ptr = buf)
-        {
-            int n = msg.Serialize(ptr, buf.Length);
-            Console.WriteLine(Convert.ToHexString(buf, 0, n).ToLower());
-        }
+        int n = msg.Serialize(buf);
+        Console.WriteLine(Convert.ToHexString(buf, 0, n).ToLower());
     }
 
     static unsafe void DeserQuantTestMessage(string hexStr)
     {
         byte[] data = Convert.FromHexString(hexStr);
-        fixed (byte* ptr = data)
-        {
-            QuantTestMessage.Deserialize(ptr, data.Length, out QuantTestMessage msg);
-            Console.WriteLine($"DivergenceVal={msg.DivergenceVal:G}");
-            Console.WriteLine($"ZeroVal={msg.ZeroVal:G}");
-            Console.WriteLine($"MaxBoundVal={msg.MaxBoundVal:G}");
-            Console.WriteLine($"MinBoundVal={msg.MinBoundVal:G}");
-            Console.WriteLine($"NearZeroVal={msg.NearZeroVal:G}");
-            Console.WriteLine($"NearHighVal={msg.NearHighVal:G}");
-        }
+        QuantTestMessage.Deserialize(data, out QuantTestMessage msg);
+        Console.WriteLine($"DivergenceVal={msg.DivergenceVal:G}");
+        Console.WriteLine($"ZeroVal={msg.ZeroVal:G}");
+        Console.WriteLine($"MaxBoundVal={msg.MaxBoundVal:G}");
+        Console.WriteLine($"MinBoundVal={msg.MinBoundVal:G}");
+        Console.WriteLine($"NearZeroVal={msg.NearZeroVal:G}");
+        Console.WriteLine($"NearHighVal={msg.NearHighVal:G}");
     }
 }
 `
@@ -1224,18 +1219,16 @@ function main() {
       msg.x = 123.45;
       msg.y = -200.0;
       msg.z = 0.0;
-      const buf = new ArrayBuffer(64);
-      const view = new DataView(buf);
-      const n = msg.serialize(view, 0);
-      const bytes = new Uint8Array(buf, 0, n);
+      const buf = new Uint8Array(64);
+      const n = msg.serialize(buf);
+      const bytes = buf.subarray(0, n);
       console.log(encodeHex(bytes));
       break;
     }
 
     case 'deser:Vector3': {
       const data = decodeHex(hexInput);
-      const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
-      const [msg] = Vector3.deserialize(view, 0);
+      const [msg] = Vector3.deserialize(data);
       console.log(` + "`X=${msg.x.toPrecision(9)}`" + `);
       console.log(` + "`Y=${msg.y.toPrecision(9)}`" + `);
       console.log(` + "`Z=${msg.z.toPrecision(9)}`" + `);
@@ -1252,18 +1245,16 @@ function main() {
       msg.health = -100;
       msg.tags = ['hero', 'player'];
       msg.data = [1, 2, 3];
-      const buf = new ArrayBuffer(512);
-      const view = new DataView(buf);
-      const n = msg.serialize(view, 0);
-      const bytes = new Uint8Array(buf, 0, n);
+      const buf = new Uint8Array(512);
+      const n = msg.serialize(buf);
+      const bytes = buf.subarray(0, n);
       console.log(encodeHex(bytes));
       break;
     }
 
     case 'deser:SpawnMessage': {
       const data = decodeHex(hexInput);
-      const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
-      const [msg] = SpawnMessage.deserialize(view, 0);
+      const [msg] = SpawnMessage.deserialize(data);
       console.log(` + "`EntityID=${msg.entityID.toString()}`" + `);
       console.log(` + "`Position.X=${msg.position.x.toPrecision(9)}`" + `);
       console.log(` + "`Position.Y=${msg.position.y.toPrecision(9)}`" + `);
@@ -1294,18 +1285,16 @@ function main() {
       msg.visible = false;
       msg.ghost = true;
       msg.name = 'TestPlayer';
-      const buf = new ArrayBuffer(512);
-      const view = new DataView(buf);
-      const n = msg.serialize(view, 0);
-      const bytes = new Uint8Array(buf, 0, n);
+      const buf = new Uint8Array(512);
+      const n = msg.serialize(buf);
+      const bytes = buf.subarray(0, n);
       console.log(encodeHex(bytes));
       break;
     }
 
     case 'deser:MoveMessage': {
       const data = decodeHex(hexInput);
-      const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
-      const [msg] = MoveMessage.deserialize(view, 0);
+      const [msg] = MoveMessage.deserialize(data);
       console.log(` + "`PlayerID=${msg.playerID}`" + `);
       console.log(` + "`Active=${msg.active.toString().toLowerCase()}`" + `);
       console.log(` + "`Visible=${msg.visible.toString().toLowerCase()}`" + `);
@@ -1318,18 +1307,16 @@ function main() {
       const msg = new EnvelopeMessage();
       msg.code = 2; // Opcode.JoinRoom
       msg.counter = 7;
-      const buf = new ArrayBuffer(64);
-      const view = new DataView(buf);
-      const n = msg.serialize(view, 0);
-      const bytes = new Uint8Array(buf, 0, n);
+      const buf = new Uint8Array(64);
+      const n = msg.serialize(buf);
+      const bytes = buf.subarray(0, n);
       console.log(encodeHex(bytes));
       break;
     }
 
     case 'deser:EnvelopeMessage': {
       const data = decodeHex(hexInput);
-      const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
-      const [msg] = EnvelopeMessage.deserialize(view, 0);
+      const [msg] = EnvelopeMessage.deserialize(data);
       console.log(` + "`Code=${msg.code}`" + `);
       console.log(` + "`Counter=${msg.counter}`" + `);
       break;
@@ -1343,18 +1330,16 @@ function main() {
       msg.minBoundVal = -500.0;
       msg.nearZeroVal = -0.001;
       msg.nearHighVal = 499.999;
-      const buf = new ArrayBuffer(64);
-      const view = new DataView(buf);
-      const n = msg.serialize(view, 0);
-      const bytes = new Uint8Array(buf, 0, n);
+      const buf = new Uint8Array(64);
+      const n = msg.serialize(buf);
+      const bytes = buf.subarray(0, n);
       console.log(encodeHex(bytes));
       break;
     }
 
     case 'deser:QuantTestMessage': {
       const data = decodeHex(hexInput);
-      const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
-      const [msg] = QuantTestMessage.deserialize(view, 0);
+      const [msg] = QuantTestMessage.deserialize(data);
       console.log(` + "`DivergenceVal=${msg.divergenceVal.toPrecision(9)}`" + `);
       console.log(` + "`ZeroVal=${msg.zeroVal.toPrecision(9)}`" + `);
       console.log(` + "`MaxBoundVal=${msg.maxBoundVal.toPrecision(9)}`" + `);
@@ -1408,7 +1393,7 @@ end
 
 local function deserializeVector3(hex)
     local data = hexToBytes(hex)
-    local msg = messages.deserialize_vector3(data, 1)
+    local msg = messages.deserialize_vector3(data)
     print(string.format("X=%.10g", msg.x))
     print(string.format("Y=%.10g", msg.y))
     print(string.format("Z=%.10g", msg.z))
@@ -1437,7 +1422,7 @@ end
 
 local function deserializeMoveMessage(hex)
     local data = hexToBytes(hex)
-    local msg = messages.deserialize_move_message(data, 1)
+    local msg = messages.deserialize_move_message(data)
     print(string.format("PlayerID=%d", msg.player_id))
     print(string.format("Active=%s", tostring(msg.active)))
     print(string.format("Visible=%s", tostring(msg.visible)))
@@ -1454,7 +1439,7 @@ end
 
 local function deserializeEnvelopeMessage(hex)
     local data = hexToBytes(hex)
-    local msg = messages.deserialize_envelope_message(data, 1)
+    local msg = messages.deserialize_envelope_message(data)
     print(string.format("Code=%d", msg.code))
     print(string.format("Counter=%d", msg.counter))
 end
@@ -1473,7 +1458,7 @@ end
 
 local function deserializeQuantTestMessage(hex)
     local data = hexToBytes(hex)
-    local msg = messages.deserialize_quant_test_message(data, 1)
+    local msg = messages.deserialize_quant_test_message(data)
     print(string.format("DivergenceVal=%.10g", msg.divergence_val))
     print(string.format("ZeroVal=%.10g", msg.zero_val))
     print(string.format("MaxBoundVal=%.10g", msg.max_bound_val))

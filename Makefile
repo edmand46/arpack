@@ -1,6 +1,6 @@
 UNITY_ASSETS := benchmarks/unity/Assets
 
-.PHONY: test bench-image generate bench size gen-unity
+.PHONY: test bench-image generate generate-docker bench bench-stats size bench-docker gen-unity
 
 IMAGE := arpack-bench
 
@@ -19,6 +19,9 @@ generate-docker: bench-image
 
 bench:
 	go test ./benchmarks/... -bench=. -benchmem -count=1 -run=^$$
+
+bench-stats:
+	go test ./benchmarks/... -bench=. -benchmem -count=5 -run=^$$
 
 size:
 	go test ./benchmarks/... -run=TestMessageSize -v

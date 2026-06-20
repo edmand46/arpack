@@ -341,7 +341,7 @@ func writeLuaConstructor(b *strings.Builder, msg parser.Message, enumNames map[s
 	b.WriteString("    return {\n")
 	for _, f := range msg.Fields {
 		defaultValue := luaDefaultValue(f, enumNames)
-		fmt.Fprintf(b, "        %s = %s,\n", luaFieldName(f.Name), defaultValue)
+		fmt.Fprintf(b, "        %s = %s,\n", luaFieldKey(f.Name), defaultValue)
 	}
 	b.WriteString("    }\n")
 	b.WriteString("end\n")
@@ -401,8 +401,8 @@ func writeLuaBoolGroupSerialize(b *strings.Builder, recv string, bools []parser.
 	varName := fmt.Sprintf("_bool_byte_%d", groupIdx)
 	fmt.Fprintf(b, "%slocal %s = 0\n", indent, varName)
 	for bit, f := range bools {
-		fmt.Fprintf(b, "%sif %s.%s then %s = bit.bor(%s, %d) end\n",
-			indent, recv, luaFieldName(f.Name), varName, varName, 1<<bit)
+		fmt.Fprintf(b, "%sif %s then %s = bit.bor(%s, %d) end\n",
+			indent, luaFieldAccess(recv, f.Name), varName, varName, 1<<bit)
 	}
 	fmt.Fprintf(b, "%spart_idx = part_idx + 1; parts[part_idx] = write_u8(%s)\n", indent, varName)
 }
@@ -413,13 +413,13 @@ func writeLuaBoolGroupDeserialize(b *strings.Builder, recv string, bools []parse
 	fmt.Fprintf(b, "%slocal %s = string.byte(data, offset)\n", indent, varName)
 	fmt.Fprintf(b, "%soffset = offset + 1\n", indent)
 	for bit, f := range bools {
-		fmt.Fprintf(b, "%s%s.%s = bit.band(%s, %d) ~= 0\n",
-			indent, recv, luaFieldName(f.Name), varName, 1<<bit)
+		fmt.Fprintf(b, "%s%s = bit.band(%s, %d) ~= 0\n",
+			indent, luaFieldAccess(recv, f.Name), varName, 1<<bit)
 	}
 }
 
 func writeLuaSerializeField(b *strings.Builder, recv string, f parser.Field, indent string, enumNames map[string]struct{}) error {
-	access := recv + "." + luaFieldName(f.Name)
+	access := luaFieldAccess(recv, f.Name)
 	switch f.Kind {
 	case parser.KindPrimitive:
 		return writeLuaSerializePrimitive(b, access, f, indent, enumNames)
@@ -535,7 +535,7 @@ func writeLuaSerializeQuant(b *strings.Builder, access string, f parser.Field, i
 }
 
 func writeLuaDeserializeField(b *strings.Builder, recv string, f parser.Field, indent string, enumNames map[string]struct{}, needsBoundsCheck bool) error {
-	access := recv + "." + luaFieldName(f.Name)
+	access := luaFieldAccess(recv, f.Name)
 	switch f.Kind {
 	case parser.KindPrimitive:
 		return writeLuaDeserializePrimitive(b, access, f, indent, enumNames, needsBoundsCheck)
@@ -706,6 +706,55 @@ func writeLuaDeserializeQuant(b *strings.Builder, access string, f parser.Field,
 
 func luaFieldName(name string) string {
 	return toSnakeCase(name)
+}
+
+func luaFieldKey(name string) string {
+	fieldName := luaFieldName(name)
+	if isLuaIdentifier(fieldName) && !isLuaKeyword(fieldName) {
+		return fieldName
+	}
+	return fmt.Sprintf("[%q]", fieldName)
+}
+
+func luaFieldAccess(recv, name string) string {
+	suffix := ""
+	base := name
+	if idx := strings.IndexByte(name, '['); idx >= 0 {
+		base = name[:idx]
+		suffix = name[idx:]
+	}
+
+	fieldName := luaFieldName(base)
+	if isLuaIdentifier(fieldName) && !isLuaKeyword(fieldName) {
+		return recv + "." + fieldName + suffix
+	}
+	return fmt.Sprintf("%s[%q]%s", recv, fieldName, suffix)
+}
+
+func isLuaIdentifier(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i, c := range s {
+		if c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') {
+			continue
+		}
+		if i > 0 && c >= '0' && c <= '9' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func isLuaKeyword(s string) bool {
+	switch s {
+	case "and", "break", "do", "else", "elseif", "end", "false", "for",
+		"function", "if", "in", "local", "nil", "not", "or", "repeat",
+		"return", "then", "true", "until", "while":
+		return true
+	}
+	return false
 }
 
 func toSnakeCase(s string) string {

@@ -15,48 +15,33 @@ func arpackEnsureUint16Length(length int, context string) uint16 {
 	return uint16(length)
 }
 
-func arpackEnsureQuantizedRange(value float64, min float64, max float64, context string) {
-	if value != value || value < min || value > max {
-		panic("arpack: quantized value out of range for " + context)
-	}
-}
-
 func (m *Vector3) Marshal(buf []byte) []byte {
-	arpackEnsureQuantizedRange(float64(m.X), -500, 500, "X")
-	_qm_X := uint16((m.X - (-500)) / (500 - (-500)) * 65535)
-	buf = binary.LittleEndian.AppendUint16(buf, _qm_X)
-	arpackEnsureQuantizedRange(float64(m.Y), -500, 500, "Y")
-	_qm_Y := uint16((m.Y - (-500)) / (500 - (-500)) * 65535)
-	buf = binary.LittleEndian.AppendUint16(buf, _qm_Y)
-	arpackEnsureQuantizedRange(float64(m.Z), -500, 500, "Z")
-	_qm_Z := uint16((m.Z - (-500)) / (500 - (-500)) * 65535)
-	buf = binary.LittleEndian.AppendUint16(buf, _qm_Z)
+	buf = binary.LittleEndian.AppendUint32(buf, math.Float32bits(m.X))
+	buf = binary.LittleEndian.AppendUint32(buf, math.Float32bits(m.Y))
+	buf = binary.LittleEndian.AppendUint32(buf, math.Float32bits(m.Z))
 	return buf
 }
 
 func (m *Vector3) Unmarshal(data []byte) (int, error) {
-	if len(data) < 6 {
+	if len(data) < 12 {
 		return 0, errors.New("arpack: buffer too short for Vector3")
 	}
 	offset := 0
-	if len(data) < offset+2 {
+	if len(data) < offset+4 {
 		return 0, errors.New("arpack: buffer too short")
 	}
-	_qm_X := binary.LittleEndian.Uint16(data[offset:])
-	offset += 2
-	m.X = float32(_qm_X)/65535*(500-(-500)) + (-500)
-	if len(data) < offset+2 {
+	m.X = math.Float32frombits(binary.LittleEndian.Uint32(data[offset:]))
+	offset += 4
+	if len(data) < offset+4 {
 		return 0, errors.New("arpack: buffer too short")
 	}
-	_qm_Y := binary.LittleEndian.Uint16(data[offset:])
-	offset += 2
-	m.Y = float32(_qm_Y)/65535*(500-(-500)) + (-500)
-	if len(data) < offset+2 {
+	m.Y = math.Float32frombits(binary.LittleEndian.Uint32(data[offset:]))
+	offset += 4
+	if len(data) < offset+4 {
 		return 0, errors.New("arpack: buffer too short")
 	}
-	_qm_Z := binary.LittleEndian.Uint16(data[offset:])
-	offset += 2
-	m.Z = float32(_qm_Z)/65535*(500-(-500)) + (-500)
+	m.Z = math.Float32frombits(binary.LittleEndian.Uint32(data[offset:]))
+	offset += 4
 	return offset, nil
 }
 
@@ -108,7 +93,11 @@ func (m *MoveMessage) Unmarshal(data []byte) (int, error) {
 	}
 	_lenWaypoints := int(binary.LittleEndian.Uint16(data[offset:]))
 	offset += 2
-	m.Waypoints = make([]Vector3, _lenWaypoints)
+	if cap(m.Waypoints) < _lenWaypoints {
+		m.Waypoints = make([]Vector3, _lenWaypoints)
+	} else {
+		m.Waypoints = m.Waypoints[:_lenWaypoints]
+	}
 	for _iWaypoints := 0; _iWaypoints < _lenWaypoints; _iWaypoints++ {
 		_nWaypoints__iWaypoints_, _err := m.Waypoints[_iWaypoints].Unmarshal(data[offset:])
 		if _err != nil {
@@ -183,7 +172,14 @@ func (m *SpawnMessage) Unmarshal(data []byte) (int, error) {
 	}
 	_lenTags := int(binary.LittleEndian.Uint16(data[offset:]))
 	offset += 2
-	m.Tags = make([]string, _lenTags)
+	if cap(m.Tags) < _lenTags {
+		m.Tags = make([]string, _lenTags)
+	} else {
+		if _lenTags < cap(m.Tags) {
+			clear(m.Tags[_lenTags:cap(m.Tags)])
+		}
+		m.Tags = m.Tags[:_lenTags]
+	}
 	for _iTags := 0; _iTags < _lenTags; _iTags++ {
 		if len(data) < offset+2 {
 			return 0, errors.New("arpack: buffer too short")
@@ -201,7 +197,11 @@ func (m *SpawnMessage) Unmarshal(data []byte) (int, error) {
 	}
 	_lenData := int(binary.LittleEndian.Uint16(data[offset:]))
 	offset += 2
-	m.Data = make([]uint8, _lenData)
+	if cap(m.Data) < _lenData {
+		m.Data = make([]uint8, _lenData)
+	} else {
+		m.Data = m.Data[:_lenData]
+	}
 	for _iData := 0; _iData < _lenData; _iData++ {
 		if len(data) < offset+1 {
 			return 0, errors.New("arpack: buffer too short")

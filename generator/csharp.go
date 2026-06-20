@@ -46,6 +46,115 @@ func GenerateCSharpSchema(schema parser.Schema, namespace string) ([]byte, error
 	b.WriteString("                throw new ArgumentException(\"arpack: buffer too small for \" + context + \": need \" + needed + \" bytes, have \" + available);\n")
 	b.WriteString("            }\n")
 	b.WriteString("        }\n\n")
+	b.WriteString("        internal static void EnsureFixedArray(Array value, int expectedLength, string context)\n")
+	b.WriteString("        {\n")
+	b.WriteString("            if (value == null)\n")
+	b.WriteString("            {\n")
+	b.WriteString("                throw new InvalidOperationException(\"arpack: \" + context + \" is null; expected length \" + expectedLength);\n")
+	b.WriteString("            }\n")
+	b.WriteString("            if (value.Length != expectedLength)\n")
+	b.WriteString("            {\n")
+	b.WriteString("                throw new InvalidOperationException(\"arpack: \" + context + \" length mismatch: expected \" + expectedLength + \", got \" + value.Length);\n")
+	b.WriteString("            }\n")
+	b.WriteString("        }\n\n")
+	b.WriteString("        internal static void WriteU16LE(byte* ptr, ushort value)\n")
+	b.WriteString("        {\n")
+	b.WriteString("            ptr[0] = (byte)value;\n")
+	b.WriteString("            ptr[1] = (byte)(value >> 8);\n")
+	b.WriteString("        }\n\n")
+	b.WriteString("        internal static ushort ReadU16LE(byte* ptr)\n")
+	b.WriteString("        {\n")
+	b.WriteString("            return (ushort)(ptr[0] | (ptr[1] << 8));\n")
+	b.WriteString("        }\n\n")
+	b.WriteString("        internal static void WriteI16LE(byte* ptr, short value)\n")
+	b.WriteString("        {\n")
+	b.WriteString("            WriteU16LE(ptr, (ushort)value);\n")
+	b.WriteString("        }\n\n")
+	b.WriteString("        internal static short ReadI16LE(byte* ptr)\n")
+	b.WriteString("        {\n")
+	b.WriteString("            return (short)ReadU16LE(ptr);\n")
+	b.WriteString("        }\n\n")
+	b.WriteString("        internal static void WriteU32LE(byte* ptr, uint value)\n")
+	b.WriteString("        {\n")
+	b.WriteString("            ptr[0] = (byte)value;\n")
+	b.WriteString("            ptr[1] = (byte)(value >> 8);\n")
+	b.WriteString("            ptr[2] = (byte)(value >> 16);\n")
+	b.WriteString("            ptr[3] = (byte)(value >> 24);\n")
+	b.WriteString("        }\n\n")
+	b.WriteString("        internal static uint ReadU32LE(byte* ptr)\n")
+	b.WriteString("        {\n")
+	b.WriteString("            return (uint)(ptr[0] | (ptr[1] << 8) | (ptr[2] << 16) | (ptr[3] << 24));\n")
+	b.WriteString("        }\n\n")
+	b.WriteString("        internal static void WriteI32LE(byte* ptr, int value)\n")
+	b.WriteString("        {\n")
+	b.WriteString("            WriteU32LE(ptr, (uint)value);\n")
+	b.WriteString("        }\n\n")
+	b.WriteString("        internal static int ReadI32LE(byte* ptr)\n")
+	b.WriteString("        {\n")
+	b.WriteString("            return (int)ReadU32LE(ptr);\n")
+	b.WriteString("        }\n\n")
+	b.WriteString("        internal static void WriteU64LE(byte* ptr, ulong value)\n")
+	b.WriteString("        {\n")
+	b.WriteString("            ptr[0] = (byte)value;\n")
+	b.WriteString("            ptr[1] = (byte)(value >> 8);\n")
+	b.WriteString("            ptr[2] = (byte)(value >> 16);\n")
+	b.WriteString("            ptr[3] = (byte)(value >> 24);\n")
+	b.WriteString("            ptr[4] = (byte)(value >> 32);\n")
+	b.WriteString("            ptr[5] = (byte)(value >> 40);\n")
+	b.WriteString("            ptr[6] = (byte)(value >> 48);\n")
+	b.WriteString("            ptr[7] = (byte)(value >> 56);\n")
+	b.WriteString("        }\n\n")
+	b.WriteString("        internal static ulong ReadU64LE(byte* ptr)\n")
+	b.WriteString("        {\n")
+	b.WriteString("            return (ulong)ptr[0] |\n")
+	b.WriteString("                ((ulong)ptr[1] << 8) |\n")
+	b.WriteString("                ((ulong)ptr[2] << 16) |\n")
+	b.WriteString("                ((ulong)ptr[3] << 24) |\n")
+	b.WriteString("                ((ulong)ptr[4] << 32) |\n")
+	b.WriteString("                ((ulong)ptr[5] << 40) |\n")
+	b.WriteString("                ((ulong)ptr[6] << 48) |\n")
+	b.WriteString("                ((ulong)ptr[7] << 56);\n")
+	b.WriteString("        }\n\n")
+	b.WriteString("        internal static void WriteI64LE(byte* ptr, long value)\n")
+	b.WriteString("        {\n")
+	b.WriteString("            WriteU64LE(ptr, (ulong)value);\n")
+	b.WriteString("        }\n\n")
+	b.WriteString("        internal static long ReadI64LE(byte* ptr)\n")
+	b.WriteString("        {\n")
+	b.WriteString("            return (long)ReadU64LE(ptr);\n")
+	b.WriteString("        }\n\n")
+	b.WriteString("        internal static uint Float32ToBits(float value)\n")
+	b.WriteString("        {\n")
+	b.WriteString("            return *(uint*)&value;\n")
+	b.WriteString("        }\n\n")
+	b.WriteString("        internal static float BitsToFloat32(uint value)\n")
+	b.WriteString("        {\n")
+	b.WriteString("            return *(float*)&value;\n")
+	b.WriteString("        }\n\n")
+	b.WriteString("        internal static ulong Float64ToBits(double value)\n")
+	b.WriteString("        {\n")
+	b.WriteString("            return *(ulong*)&value;\n")
+	b.WriteString("        }\n\n")
+	b.WriteString("        internal static double BitsToFloat64(ulong value)\n")
+	b.WriteString("        {\n")
+	b.WriteString("            return *(double*)&value;\n")
+	b.WriteString("        }\n\n")
+	b.WriteString("        internal static void WriteFloat32LE(byte* ptr, float value)\n")
+	b.WriteString("        {\n")
+	b.WriteString("            WriteU32LE(ptr, Float32ToBits(value));\n")
+	b.WriteString("        }\n\n")
+	b.WriteString("        internal static float ReadFloat32LE(byte* ptr)\n")
+	b.WriteString("        {\n")
+	b.WriteString("            return BitsToFloat32(ReadU32LE(ptr));\n")
+	b.WriteString("        }\n\n")
+	b.WriteString("        internal static void WriteFloat64LE(byte* ptr, double value)\n")
+	b.WriteString("        {\n")
+	b.WriteString("            WriteU64LE(ptr, Float64ToBits(value));\n")
+	b.WriteString("        }\n\n")
+	b.WriteString("        internal static double ReadFloat64LE(byte* ptr)\n")
+	b.WriteString("        {\n")
+	b.WriteString("            return BitsToFloat64(ReadU64LE(ptr));\n")
+	b.WriteString("        }\n\n")
 	if needsLengthGuards {
 		b.WriteString("        internal static ushort EnsureU16Length(int length, string context)\n")
 		b.WriteString("        {\n")
@@ -114,6 +223,14 @@ func writeCSharpMessage(b *strings.Builder, msg parser.Message, enumNames map[st
 	}
 	b.WriteString("\n")
 
+	b.WriteString("        public int Serialize(Span<byte> buffer)\n")
+	b.WriteString("        {\n")
+	b.WriteString("            fixed (byte* ptr = buffer)\n")
+	b.WriteString("            {\n")
+	b.WriteString("                return Serialize(ptr, buffer.Length);\n")
+	b.WriteString("            }\n")
+	b.WriteString("        }\n\n")
+
 	b.WriteString("        public int Serialize(byte* buffer, int length)\n")
 	b.WriteString("        {\n")
 	b.WriteString("            byte* ptr = buffer;\n")
@@ -128,6 +245,14 @@ func writeCSharpMessage(b *strings.Builder, msg parser.Message, enumNames map[st
 		}
 	}
 	b.WriteString("            return (int)(ptr - buffer);\n")
+	b.WriteString("        }\n\n")
+
+	fmt.Fprintf(b, "        public static int Deserialize(ReadOnlySpan<byte> data, out %s msg)\n", msg.Name)
+	b.WriteString("        {\n")
+	b.WriteString("            fixed (byte* ptr = data)\n")
+	b.WriteString("            {\n")
+	fmt.Fprintf(b, "                return Deserialize(ptr, data.Length, out msg);\n")
+	b.WriteString("            }\n")
 	b.WriteString("        }\n\n")
 
 	fmt.Fprintf(b, "        public static int Deserialize(byte* buffer, int length, out %s msg)\n", msg.Name)
@@ -178,6 +303,7 @@ func writeCSharpSerializeField(b *strings.Builder, f parser.Field, indent string
 		fmt.Fprintf(b, "%sptr += %s.Serialize(ptr, (int)(end - ptr));\n", indent, f.Name)
 	case parser.KindFixedArray:
 		iVar := "_i" + f.Name
+		fmt.Fprintf(b, "%sArpackGenerated.EnsureFixedArray(%s, %d, %q);\n", indent, f.Name, f.FixedLen, "fixed array for "+f.Name)
 		fmt.Fprintf(b, "%sfor (int %s = 0; %s < %d; %s++)\n%s{\n",
 			indent, iVar, iVar, f.FixedLen, iVar, indent)
 		elemField := parser.Field{
@@ -197,7 +323,7 @@ func writeCSharpSerializeField(b *strings.Builder, f parser.Field, indent string
 	case parser.KindSlice:
 		lenVar := "_len" + sanitizeVarName(f.Name)
 		fmt.Fprintf(b, "%sArpackGenerated.EnsureWritable(ptr, end, 2, %q);\n", indent, "slice length for "+f.Name)
-		fmt.Fprintf(b, "%sushort %s = ArpackGenerated.EnsureU16Length(%s?.Length ?? 0, %q); *(ushort*)ptr = %s; ptr += 2;\n",
+		fmt.Fprintf(b, "%sushort %s = ArpackGenerated.EnsureU16Length(%s?.Length ?? 0, %q); ArpackGenerated.WriteU16LE(ptr, %s); ptr += 2;\n",
 			indent, lenVar, f.Name, lengthContext(f), lenVar)
 		fmt.Fprintf(b, "%sif (%s != null)\n%s{\n", indent, f.Name, indent)
 		iVar := "_i" + f.Name
@@ -235,10 +361,10 @@ func writeCSharpSerializePrimitive(
 	switch f.Primitive {
 	case parser.KindFloat32:
 		fmt.Fprintf(b, "%sArpackGenerated.EnsureWritable(ptr, end, 4, %q);\n", indent, "float32")
-		fmt.Fprintf(b, "%s*(float*)ptr = %s; ptr += 4;\n", indent, valueExpr)
+		fmt.Fprintf(b, "%sArpackGenerated.WriteFloat32LE(ptr, %s); ptr += 4;\n", indent, valueExpr)
 	case parser.KindFloat64:
 		fmt.Fprintf(b, "%sArpackGenerated.EnsureWritable(ptr, end, 8, %q);\n", indent, "float64")
-		fmt.Fprintf(b, "%s*(double*)ptr = %s; ptr += 8;\n", indent, valueExpr)
+		fmt.Fprintf(b, "%sArpackGenerated.WriteFloat64LE(ptr, %s); ptr += 8;\n", indent, valueExpr)
 	case parser.KindInt8:
 		fmt.Fprintf(b, "%sArpackGenerated.EnsureWritable(ptr, end, 1, %q);\n", indent, "int8")
 		fmt.Fprintf(b, "%s*(sbyte*)ptr = %s; ptr += 1;\n", indent, valueExpr)
@@ -250,28 +376,28 @@ func writeCSharpSerializePrimitive(
 		fmt.Fprintf(b, "%s*ptr = (byte)(%s ? 1 : 0); ptr += 1;\n", indent, valueExpr)
 	case parser.KindInt16:
 		fmt.Fprintf(b, "%sArpackGenerated.EnsureWritable(ptr, end, 2, %q);\n", indent, "int16")
-		fmt.Fprintf(b, "%s*(short*)ptr = %s; ptr += 2;\n", indent, valueExpr)
+		fmt.Fprintf(b, "%sArpackGenerated.WriteI16LE(ptr, %s); ptr += 2;\n", indent, valueExpr)
 	case parser.KindUint16:
 		fmt.Fprintf(b, "%sArpackGenerated.EnsureWritable(ptr, end, 2, %q);\n", indent, "uint16")
-		fmt.Fprintf(b, "%s*(ushort*)ptr = %s; ptr += 2;\n", indent, valueExpr)
+		fmt.Fprintf(b, "%sArpackGenerated.WriteU16LE(ptr, %s); ptr += 2;\n", indent, valueExpr)
 	case parser.KindInt32:
 		fmt.Fprintf(b, "%sArpackGenerated.EnsureWritable(ptr, end, 4, %q);\n", indent, "int32")
-		fmt.Fprintf(b, "%s*(int*)ptr = %s; ptr += 4;\n", indent, valueExpr)
+		fmt.Fprintf(b, "%sArpackGenerated.WriteI32LE(ptr, %s); ptr += 4;\n", indent, valueExpr)
 	case parser.KindUint32:
 		fmt.Fprintf(b, "%sArpackGenerated.EnsureWritable(ptr, end, 4, %q);\n", indent, "uint32")
-		fmt.Fprintf(b, "%s*(uint*)ptr = %s; ptr += 4;\n", indent, valueExpr)
+		fmt.Fprintf(b, "%sArpackGenerated.WriteU32LE(ptr, %s); ptr += 4;\n", indent, valueExpr)
 	case parser.KindInt64:
 		fmt.Fprintf(b, "%sArpackGenerated.EnsureWritable(ptr, end, 8, %q);\n", indent, "int64")
-		fmt.Fprintf(b, "%s*(long*)ptr = %s; ptr += 8;\n", indent, valueExpr)
+		fmt.Fprintf(b, "%sArpackGenerated.WriteI64LE(ptr, %s); ptr += 8;\n", indent, valueExpr)
 	case parser.KindUint64:
 		fmt.Fprintf(b, "%sArpackGenerated.EnsureWritable(ptr, end, 8, %q);\n", indent, "uint64")
-		fmt.Fprintf(b, "%s*(ulong*)ptr = %s; ptr += 8;\n", indent, valueExpr)
+		fmt.Fprintf(b, "%sArpackGenerated.WriteU64LE(ptr, %s); ptr += 8;\n", indent, valueExpr)
 	case parser.KindString:
 		lenVar := "_slen" + sanitizeVarName(access)
 		fmt.Fprintf(b, "%sint %s = %s != null ? Encoding.UTF8.GetByteCount(%s) : 0;\n",
 			indent, lenVar, valueExpr, valueExpr)
 		fmt.Fprintf(b, "%sArpackGenerated.EnsureWritable(ptr, end, 2, %q);\n", indent, "string length for "+f.Name)
-		fmt.Fprintf(b, "%s*(ushort*)ptr = ArpackGenerated.EnsureU16Length(%s, %q); ptr += 2;\n",
+		fmt.Fprintf(b, "%sArpackGenerated.WriteU16LE(ptr, ArpackGenerated.EnsureU16Length(%s, %q)); ptr += 2;\n",
 			indent, lenVar, lengthContext(f))
 		fmt.Fprintf(b, "%sArpackGenerated.EnsureWritable(ptr, end, %s, %q);\n", indent, lenVar, "string data for "+f.Name)
 		fmt.Fprintf(b, "%sif (%s != null && %s > 0)\n%s{\n", indent, valueExpr, lenVar, indent)
@@ -295,7 +421,7 @@ func writeCSharpSerializeQuant(b *strings.Builder, access string, f parser.Field
 		fmt.Fprintf(b, "%s*ptr = %s; ptr += 1;\n", indent, quantizeExpr("cs", access, q, 8))
 	} else {
 		fmt.Fprintf(b, "%sArpackGenerated.EnsureWritable(ptr, end, 2, %q);\n", indent, "quantized value for "+f.Name)
-		fmt.Fprintf(b, "%s*(ushort*)ptr = %s; ptr += 2;\n", indent, quantizeExpr("cs", access, q, 16))
+		fmt.Fprintf(b, "%sArpackGenerated.WriteU16LE(ptr, %s); ptr += 2;\n", indent, quantizeExpr("cs", access, q, 16))
 	}
 	return nil
 }
@@ -336,7 +462,7 @@ func writeCSharpDeserializeField(
 	case parser.KindSlice:
 		lenVar := "_len" + sanitizeVarName(f.Name)
 		fmt.Fprintf(b, "%sArpackGenerated.EnsureReadable(ptr, end, 2, %q);\n", indent, "slice length for "+f.Name)
-		fmt.Fprintf(b, "%sint %s = *(ushort*)ptr; ptr += 2;\n", indent, lenVar)
+		fmt.Fprintf(b, "%sint %s = ArpackGenerated.ReadU16LE(ptr); ptr += 2;\n", indent, lenVar)
 		fmt.Fprintf(b, "%s%s = new %s[%s];\n", indent, access, csharpTypeName(*f.Elem, enumNames), lenVar)
 		iVar := "_i" + sanitizeVarName(f.Name)
 		fmt.Fprintf(b, "%sfor (int %s = 0; %s < %s; %s++)\n%s{\n",
@@ -372,10 +498,10 @@ func writeCSharpDeserializePrimitive(
 	switch f.Primitive {
 	case parser.KindFloat32:
 		fmt.Fprintf(b, "%sArpackGenerated.EnsureReadable(ptr, end, 4, %q);\n", indent, "float32")
-		fmt.Fprintf(b, "%s%s = %s; ptr += 4;\n", indent, access, csharpDeserializeValueExpr("*(float*)ptr", f, enumNames))
+		fmt.Fprintf(b, "%s%s = %s; ptr += 4;\n", indent, access, csharpDeserializeValueExpr("ArpackGenerated.ReadFloat32LE(ptr)", f, enumNames))
 	case parser.KindFloat64:
 		fmt.Fprintf(b, "%sArpackGenerated.EnsureReadable(ptr, end, 8, %q);\n", indent, "float64")
-		fmt.Fprintf(b, "%s%s = %s; ptr += 8;\n", indent, access, csharpDeserializeValueExpr("*(double*)ptr", f, enumNames))
+		fmt.Fprintf(b, "%s%s = %s; ptr += 8;\n", indent, access, csharpDeserializeValueExpr("ArpackGenerated.ReadFloat64LE(ptr)", f, enumNames))
 	case parser.KindInt8:
 		fmt.Fprintf(b, "%sArpackGenerated.EnsureReadable(ptr, end, 1, %q);\n", indent, "int8")
 		fmt.Fprintf(b, "%s%s = %s; ptr += 1;\n", indent, access, csharpDeserializeValueExpr("*(sbyte*)ptr", f, enumNames))
@@ -387,26 +513,26 @@ func writeCSharpDeserializePrimitive(
 		fmt.Fprintf(b, "%s%s = %s; ptr += 1;\n", indent, access, csharpDeserializeValueExpr("*ptr != 0", f, enumNames))
 	case parser.KindInt16:
 		fmt.Fprintf(b, "%sArpackGenerated.EnsureReadable(ptr, end, 2, %q);\n", indent, "int16")
-		fmt.Fprintf(b, "%s%s = %s; ptr += 2;\n", indent, access, csharpDeserializeValueExpr("*(short*)ptr", f, enumNames))
+		fmt.Fprintf(b, "%s%s = %s; ptr += 2;\n", indent, access, csharpDeserializeValueExpr("ArpackGenerated.ReadI16LE(ptr)", f, enumNames))
 	case parser.KindUint16:
 		fmt.Fprintf(b, "%sArpackGenerated.EnsureReadable(ptr, end, 2, %q);\n", indent, "uint16")
-		fmt.Fprintf(b, "%s%s = %s; ptr += 2;\n", indent, access, csharpDeserializeValueExpr("*(ushort*)ptr", f, enumNames))
+		fmt.Fprintf(b, "%s%s = %s; ptr += 2;\n", indent, access, csharpDeserializeValueExpr("ArpackGenerated.ReadU16LE(ptr)", f, enumNames))
 	case parser.KindInt32:
 		fmt.Fprintf(b, "%sArpackGenerated.EnsureReadable(ptr, end, 4, %q);\n", indent, "int32")
-		fmt.Fprintf(b, "%s%s = %s; ptr += 4;\n", indent, access, csharpDeserializeValueExpr("*(int*)ptr", f, enumNames))
+		fmt.Fprintf(b, "%s%s = %s; ptr += 4;\n", indent, access, csharpDeserializeValueExpr("ArpackGenerated.ReadI32LE(ptr)", f, enumNames))
 	case parser.KindUint32:
 		fmt.Fprintf(b, "%sArpackGenerated.EnsureReadable(ptr, end, 4, %q);\n", indent, "uint32")
-		fmt.Fprintf(b, "%s%s = %s; ptr += 4;\n", indent, access, csharpDeserializeValueExpr("*(uint*)ptr", f, enumNames))
+		fmt.Fprintf(b, "%s%s = %s; ptr += 4;\n", indent, access, csharpDeserializeValueExpr("ArpackGenerated.ReadU32LE(ptr)", f, enumNames))
 	case parser.KindInt64:
 		fmt.Fprintf(b, "%sArpackGenerated.EnsureReadable(ptr, end, 8, %q);\n", indent, "int64")
-		fmt.Fprintf(b, "%s%s = %s; ptr += 8;\n", indent, access, csharpDeserializeValueExpr("*(long*)ptr", f, enumNames))
+		fmt.Fprintf(b, "%s%s = %s; ptr += 8;\n", indent, access, csharpDeserializeValueExpr("ArpackGenerated.ReadI64LE(ptr)", f, enumNames))
 	case parser.KindUint64:
 		fmt.Fprintf(b, "%sArpackGenerated.EnsureReadable(ptr, end, 8, %q);\n", indent, "uint64")
-		fmt.Fprintf(b, "%s%s = %s; ptr += 8;\n", indent, access, csharpDeserializeValueExpr("*(ulong*)ptr", f, enumNames))
+		fmt.Fprintf(b, "%s%s = %s; ptr += 8;\n", indent, access, csharpDeserializeValueExpr("ArpackGenerated.ReadU64LE(ptr)", f, enumNames))
 	case parser.KindString:
 		lenVar := "_slen" + sanitizeVarName(access)
 		fmt.Fprintf(b, "%sArpackGenerated.EnsureReadable(ptr, end, 2, %q);\n", indent, "string length for "+f.Name)
-		fmt.Fprintf(b, "%sint %s = *(ushort*)ptr; ptr += 2;\n", indent, lenVar)
+		fmt.Fprintf(b, "%sint %s = ArpackGenerated.ReadU16LE(ptr); ptr += 2;\n", indent, lenVar)
 		fmt.Fprintf(b, "%sArpackGenerated.EnsureReadable(ptr, end, %s, %q);\n", indent, lenVar, "string data for "+f.Name)
 		expr := fmt.Sprintf("%s > 0 ? Encoding.UTF8.GetString(ptr, %s) : string.Empty", lenVar, lenVar)
 		fmt.Fprintf(b, "%s%s = %s;\n", indent, access, csharpDeserializeValueExpr(expr, f, enumNames))
@@ -423,7 +549,7 @@ func writeCSharpDeserializeQuant(b *strings.Builder, access string, f parser.Fie
 		fmt.Fprintf(b, "%s%s = %s; ptr += 1;\n", indent, access, csharpDeserializeValueExpr(expr, f, nil))
 	} else {
 		fmt.Fprintf(b, "%sArpackGenerated.EnsureReadable(ptr, end, 2, %q);\n", indent, "quantized value for "+f.Name)
-		expr := dequantizeExpr("cs", "*(ushort*)ptr", q, f.Primitive)
+		expr := dequantizeExpr("cs", "ArpackGenerated.ReadU16LE(ptr)", q, f.Primitive)
 		fmt.Fprintf(b, "%s%s = %s; ptr += 2;\n", indent, access, csharpDeserializeValueExpr(expr, f, nil))
 	}
 	return nil

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"go/token"
@@ -69,13 +70,10 @@ func main() {
 		log.Fatalf("arpack: %v", err)
 	}
 
+	if err := writeOutputs(files); err != nil {
+		log.Fatalf("arpack: %v", err)
+	}
 	for _, f := range files {
-		if err := os.MkdirAll(f.dir, 0755); err != nil {
-			log.Fatalf("arpack: mkdir %s: %v", f.dir, err)
-		}
-		if err := os.WriteFile(f.path, f.data, 0644); err != nil {
-			log.Fatalf("arpack: write %s: %v", f.path, err)
-		}
 		fmt.Printf("arpack: wrote %s\n", f.path)
 	}
 }
@@ -149,6 +147,161 @@ func buildOutputs(schema parser.Schema, req genRequest) (files []genFile, notice
 	}
 
 	return files, notices, nil
+}
+
+type tempOutputWriter func(genFile) (string, error)
+type outputRenamer func(oldpath, newpath string) error
+
+type stagedOutput struct {
+	finalPath string
+	tempPath  string
+}
+
+type replacedOutput struct {
+	finalPath  string
+	backupPath string
+	existed    bool
+}
+
+func writeOutputs(files []genFile) error {
+	return writeOutputsWith(files, writeTempOutput, os.Rename)
+}
+
+func writeOutputsWith(files []genFile, writeTemp tempOutputWriter, rename outputRenamer) error {
+	for _, f := range files {
+		if err := os.MkdirAll(f.dir, 0755); err != nil {
+			return fmt.Errorf("mkdir %s: %w", f.dir, err)
+		}
+	}
+
+	staged := make([]stagedOutput, 0, len(files))
+	defer func() {
+		for _, f := range staged {
+			if f.tempPath != "" {
+				_ = os.Remove(f.tempPath)
+			}
+		}
+	}()
+
+	for _, f := range files {
+		tempPath, err := writeTemp(f)
+		if err != nil {
+			return err
+		}
+		staged = append(staged, stagedOutput{finalPath: f.path, tempPath: tempPath})
+	}
+
+	replaced := make([]replacedOutput, 0, len(staged))
+	committed := false
+	defer func() {
+		if !committed {
+			rollbackReplacements(replaced)
+		}
+		for _, f := range replaced {
+			if f.backupPath != "" {
+				_ = os.Remove(f.backupPath)
+			}
+		}
+	}()
+
+	for i := range staged {
+		repl, err := replaceWithBackup(staged[i], rename)
+		if err != nil {
+			return err
+		}
+		staged[i].tempPath = ""
+		replaced = append(replaced, repl)
+	}
+
+	committed = true
+	return nil
+}
+
+func replaceWithBackup(staged stagedOutput, rename outputRenamer) (replacedOutput, error) {
+	repl := replacedOutput{finalPath: staged.finalPath}
+	if _, err := os.Stat(staged.finalPath); err == nil {
+		backupPath, err := tempPathInDir(filepath.Dir(staged.finalPath), "."+filepath.Base(staged.finalPath)+".*.bak")
+		if err != nil {
+			return repl, fmt.Errorf("create backup path for %s: %w", staged.finalPath, err)
+		}
+		if err := rename(staged.finalPath, backupPath); err != nil {
+			return repl, fmt.Errorf("backup %s: %w", staged.finalPath, err)
+		}
+		repl.existed = true
+		repl.backupPath = backupPath
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return repl, fmt.Errorf("stat %s: %w", staged.finalPath, err)
+	}
+
+	if err := rename(staged.tempPath, staged.finalPath); err != nil {
+		if repl.existed {
+			_ = rename(repl.backupPath, repl.finalPath)
+			repl.backupPath = ""
+		}
+		return repl, fmt.Errorf("replace %s: %w", staged.finalPath, err)
+	}
+
+	return repl, nil
+}
+
+func tempPathInDir(dir, pattern string) (string, error) {
+	tmp, err := os.CreateTemp(dir, pattern)
+	if err != nil {
+		return "", err
+	}
+	path := tmp.Name()
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(path)
+		return "", err
+	}
+	if err := os.Remove(path); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+func rollbackReplacements(replaced []replacedOutput) {
+	for i := len(replaced) - 1; i >= 0; i-- {
+		f := replaced[i]
+		if f.existed {
+			_ = os.Remove(f.finalPath)
+			if f.backupPath != "" {
+				_ = os.Rename(f.backupPath, f.finalPath)
+			}
+		} else {
+			_ = os.Remove(f.finalPath)
+		}
+	}
+}
+
+func writeTempOutput(f genFile) (string, error) {
+	name := "." + filepath.Base(f.path) + ".*.tmp"
+	tmp, err := os.CreateTemp(f.dir, name)
+	if err != nil {
+		return "", fmt.Errorf("create temp for %s: %w", f.path, err)
+	}
+
+	tempPath := tmp.Name()
+	ok := false
+	defer func() {
+		if !ok {
+			_ = tmp.Close()
+			_ = os.Remove(tempPath)
+		}
+	}()
+
+	if _, err := tmp.Write(f.data); err != nil {
+		return "", fmt.Errorf("write temp for %s: %w", f.path, err)
+	}
+	if err := tmp.Chmod(0644); err != nil {
+		return "", fmt.Errorf("chmod temp for %s: %w", f.path, err)
+	}
+	if err := tmp.Close(); err != nil {
+		return "", fmt.Errorf("close temp for %s: %w", f.path, err)
+	}
+
+	ok = true
+	return tempPath, nil
 }
 
 func toTitle(s string) string {

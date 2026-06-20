@@ -51,8 +51,12 @@ func GenerateGoSchema(schema parser.Schema, pkgName string) ([]byte, error) {
 		b.WriteString("}\n\n")
 	}
 
+	messageIndex := make(map[string]parser.Message, len(messages))
 	for _, msg := range messages {
-		if err := writeGoMessage(&b, msg); err != nil {
+		messageIndex[msg.Name] = msg
+	}
+	for _, msg := range messages {
+		if err := writeGoMessage(&b, msg, messageIndex); err != nil {
 			return nil, fmt.Errorf("message %s: %w", msg.Name, err)
 		}
 	}
@@ -65,7 +69,7 @@ func GenerateGoSchema(schema parser.Schema, pkgName string) ([]byte, error) {
 	return formatted, nil
 }
 
-func writeGoMessage(b *strings.Builder, msg parser.Message) error {
+func writeGoMessage(b *strings.Builder, msg parser.Message, messageIndex map[string]parser.Message) error {
 	segs := segmentFields(msg.Fields)
 
 	fmt.Fprintf(b, "func (m *%s) Marshal(buf []byte) []byte {\n", msg.Name)
@@ -88,7 +92,7 @@ func writeGoMessage(b *strings.Builder, msg parser.Message) error {
 	b.WriteString("\toffset := 0\n")
 	for i, seg := range segs {
 		if seg.single != nil {
-			if err := writeGoUnmarshalField(b, "m", *seg.single, "\t"); err != nil {
+			if err := writeGoUnmarshalField(b, "m", *seg.single, "\t", messageIndex); err != nil {
 				return err
 			}
 		} else {
@@ -216,7 +220,7 @@ func writeGoMarshalQuant(b *strings.Builder, access string, f parser.Field, inde
 	return nil
 }
 
-func writeGoUnmarshalField(b *strings.Builder, recv string, f parser.Field, indent string) error {
+func writeGoUnmarshalField(b *strings.Builder, recv string, f parser.Field, indent string, messageIndex map[string]parser.Message) error {
 	access := recv + "." + f.Name
 	switch f.Kind {
 	case parser.KindPrimitive:
@@ -241,7 +245,7 @@ func writeGoUnmarshalField(b *strings.Builder, recv string, f parser.Field, inde
 			Elem:      f.Elem.Elem,
 			FixedLen:  f.Elem.FixedLen,
 		}
-		if err := writeGoUnmarshalField(b, recv, elemField, indent+"\t"); err != nil {
+		if err := writeGoUnmarshalField(b, recv, elemField, indent+"\t", messageIndex); err != nil {
 			return err
 		}
 		fmt.Fprintf(b, "%s}\n", indent)
@@ -251,7 +255,15 @@ func writeGoUnmarshalField(b *strings.Builder, recv string, f parser.Field, inde
 		fmt.Fprintf(b, "%sif len(data) < offset+2 { return 0, errors.New(\"arpack: buffer too short\") }\n", indent)
 		fmt.Fprintf(b, "%s%s := int(binary.LittleEndian.Uint16(data[offset:]))\n", indent, lenVar)
 		fmt.Fprintf(b, "%soffset += 2\n", indent)
-		fmt.Fprintf(b, "%s%s = make(%s, %s)\n", indent, access, f.GoTypeName(), lenVar)
+		fmt.Fprintf(b, "%sif cap(%s) < %s {\n", indent, access, lenVar)
+		fmt.Fprintf(b, "%s\t%s = make(%s, %s)\n", indent, access, f.GoTypeName(), lenVar)
+		fmt.Fprintf(b, "%s} else {\n", indent)
+		if goFieldContainsReferences(*f.Elem, messageIndex, nil) {
+			fmt.Fprintf(b, "%s\tif %s < cap(%s) { clear(%s[%s:cap(%s)]) }\n",
+				indent, lenVar, access, access, lenVar, access)
+		}
+		fmt.Fprintf(b, "%s\t%s = %s[:%s]\n", indent, access, access, lenVar)
+		fmt.Fprintf(b, "%s}\n", indent)
 		iVar := "_i" + sanitizeVarName(f.Name)
 		fmt.Fprintf(b, "%sfor %s := 0; %s < %s; %s++ {\n", indent, iVar, iVar, lenVar, iVar)
 		elemField := parser.Field{
@@ -264,7 +276,7 @@ func writeGoUnmarshalField(b *strings.Builder, recv string, f parser.Field, inde
 			Elem:      f.Elem.Elem,
 			FixedLen:  f.Elem.FixedLen,
 		}
-		if err := writeGoUnmarshalField(b, recv, elemField, indent+"\t"); err != nil {
+		if err := writeGoUnmarshalField(b, recv, elemField, indent+"\t", messageIndex); err != nil {
 			return err
 		}
 		fmt.Fprintf(b, "%s}\n", indent)
@@ -395,6 +407,39 @@ func needsMathField(f parser.Field) bool {
 	case parser.KindFixedArray, parser.KindSlice:
 		if f.Elem != nil {
 			return needsMathField(*f.Elem)
+		}
+	}
+	return false
+}
+
+func goFieldContainsReferences(f parser.Field, messageIndex map[string]parser.Message, visiting map[string]bool) bool {
+	switch f.Kind {
+	case parser.KindPrimitive:
+		return f.Primitive == parser.KindString
+	case parser.KindSlice:
+		return true
+	case parser.KindFixedArray:
+		if f.Elem == nil {
+			return false
+		}
+		return goFieldContainsReferences(*f.Elem, messageIndex, visiting)
+	case parser.KindNested:
+		if visiting == nil {
+			visiting = map[string]bool{}
+		}
+		if visiting[f.TypeName] {
+			return false
+		}
+		msg, ok := messageIndex[f.TypeName]
+		if !ok {
+			return false
+		}
+		visiting[f.TypeName] = true
+		defer delete(visiting, f.TypeName)
+		for _, nestedField := range msg.Fields {
+			if goFieldContainsReferences(nestedField, messageIndex, visiting) {
+				return true
+			}
 		}
 	}
 	return false

@@ -1,21 +1,16 @@
-.cache
-.claude
-.codex
+.cache/
+.claude/
+.codex/
 .DS_Store
+.spec/
 
-Library
-Logs
-Packages
-Temp
-UserSettings
+.idea/
+bin/
+obj/
 
-.idea
-bin
-obj
-
-Library
-Logs
-Temp
-UserSettings
-
-ragon
+# Unity-generated local state.
+Library/
+Logs/
+Packages/
+Temp/
+UserSettings/

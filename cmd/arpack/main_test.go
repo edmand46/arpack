@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -143,6 +144,139 @@ func TestBuildOutputs_KeywordDirFallsBackToSchemaPackage(t *testing.T) {
 	}
 	if !strings.Contains(string(files[0].data), "package messages") {
 		t.Fatalf("expected fallback to schema package, got:\n%s", files[0].data)
+	}
+}
+
+func TestWriteOutputs_LaterTempWriteFailureLeavesExistingOutputUnchanged(t *testing.T) {
+	dir := t.TempDir()
+	firstPath := filepath.Join(dir, "first.gen.go")
+	secondPath := filepath.Join(dir, "second.gen.ts")
+	if err := os.WriteFile(firstPath, []byte("existing first"), 0644); err != nil {
+		t.Fatalf("seed first output: %v", err)
+	}
+
+	writeCalls := 0
+	errWriteSecond := errors.New("simulated second temp write failure")
+	err := writeOutputsWith(
+		[]genFile{
+			{dir: dir, path: firstPath, data: []byte("new first")},
+			{dir: dir, path: secondPath, data: []byte("new second")},
+		},
+		func(f genFile) (string, error) {
+			writeCalls++
+			if writeCalls == 2 {
+				return "", errWriteSecond
+			}
+			tmp, err := os.CreateTemp(f.dir, "."+filepath.Base(f.path)+".*.tmp")
+			if err != nil {
+				return "", err
+			}
+			if _, err := tmp.Write(f.data); err != nil {
+				_ = tmp.Close()
+				_ = os.Remove(tmp.Name())
+				return "", err
+			}
+			if err := tmp.Close(); err != nil {
+				_ = os.Remove(tmp.Name())
+				return "", err
+			}
+			return tmp.Name(), nil
+		},
+		os.Rename,
+	)
+	if !errors.Is(err, errWriteSecond) {
+		t.Fatalf("writeOutputsWith error = %v, want %v", err, errWriteSecond)
+	}
+
+	got, err := os.ReadFile(firstPath)
+	if err != nil {
+		t.Fatalf("read first output: %v", err)
+	}
+	if string(got) != "existing first" {
+		t.Fatalf("first output = %q, want existing content", got)
+	}
+	if _, err := os.Stat(secondPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("second output stat error = %v, want not exist", err)
+	}
+	matches, err := filepath.Glob(filepath.Join(dir, ".*.tmp"))
+	if err != nil {
+		t.Fatalf("glob temps: %v", err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("expected temp files to be cleaned up, found %v", matches)
+	}
+}
+
+func TestWriteOutputs_LaterRenameFailureRollsBackEarlierReplacements(t *testing.T) {
+	dir := t.TempDir()
+	firstPath := filepath.Join(dir, "first.gen.go")
+	secondPath := filepath.Join(dir, "second.gen.ts")
+	if err := os.WriteFile(firstPath, []byte("existing first"), 0644); err != nil {
+		t.Fatalf("seed first output: %v", err)
+	}
+	if err := os.WriteFile(secondPath, []byte("existing second"), 0644); err != nil {
+		t.Fatalf("seed second output: %v", err)
+	}
+
+	tempForFinal := map[string]string{}
+	writeTemp := func(f genFile) (string, error) {
+		tmp, err := os.CreateTemp(f.dir, "."+filepath.Base(f.path)+".*.tmp")
+		if err != nil {
+			return "", err
+		}
+		if _, err := tmp.Write(f.data); err != nil {
+			_ = tmp.Close()
+			_ = os.Remove(tmp.Name())
+			return "", err
+		}
+		if err := tmp.Close(); err != nil {
+			_ = os.Remove(tmp.Name())
+			return "", err
+		}
+		tempForFinal[f.path] = tmp.Name()
+		return tmp.Name(), nil
+	}
+
+	errReplaceSecond := errors.New("simulated second replace failure")
+	rename := func(oldpath, newpath string) error {
+		if oldpath == tempForFinal[secondPath] {
+			return errReplaceSecond
+		}
+		return os.Rename(oldpath, newpath)
+	}
+
+	err := writeOutputsWith(
+		[]genFile{
+			{dir: dir, path: firstPath, data: []byte("new first")},
+			{dir: dir, path: secondPath, data: []byte("new second")},
+		},
+		writeTemp,
+		rename,
+	)
+	if !errors.Is(err, errReplaceSecond) {
+		t.Fatalf("writeOutputsWith error = %v, want %v", err, errReplaceSecond)
+	}
+
+	gotFirst, err := os.ReadFile(firstPath)
+	if err != nil {
+		t.Fatalf("read first output: %v", err)
+	}
+	if string(gotFirst) != "existing first" {
+		t.Fatalf("first output = %q, want rollback to existing content", gotFirst)
+	}
+	gotSecond, err := os.ReadFile(secondPath)
+	if err != nil {
+		t.Fatalf("read second output: %v", err)
+	}
+	if string(gotSecond) != "existing second" {
+		t.Fatalf("second output = %q, want rollback to existing content", gotSecond)
+	}
+	matches, err := filepath.Glob(filepath.Join(dir, ".*"))
+	if err != nil {
+		t.Fatalf("glob temp files: %v", err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("expected temp/backup files to be cleaned up, found %v", matches)
 	}
 }
 

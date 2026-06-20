@@ -5,6 +5,8 @@ import (
 )
 
 // Vec3 mirrors the MoveMessage's Vector3 fields for FlatBuffers encoding.
+// It is encoded as a FlatBuffers struct, not a table, matching the usual
+// schema choice for a fixed-size scalar vector.
 type Vec3 struct {
 	X, Y, Z float32
 }
@@ -39,14 +41,13 @@ const (
 	slotName      = 7
 )
 
-// buildVec3 writes a Vec3 as a table with 3 float32 fields and returns its offset.
-// Vec3 slots: x=0, y=1, z=2
-func buildVec3(b *flatbuffers.Builder, v Vec3) flatbuffers.UOffsetT {
-	b.StartObject(3)
-	b.PrependFloat32Slot(0, v.X, 0)
-	b.PrependFloat32Slot(1, v.Y, 0)
-	b.PrependFloat32Slot(2, v.Z, 0)
-	return b.EndObject()
+// buildVec3Struct writes a Vec3 as an inline FlatBuffers struct.
+func buildVec3Struct(b *flatbuffers.Builder, v Vec3) flatbuffers.UOffsetT {
+	b.Prep(4, 12)
+	b.PrependFloat32(v.Z)
+	b.PrependFloat32(v.Y)
+	b.PrependFloat32(v.X)
+	return b.Offset()
 }
 
 // Marshal serialises msg into a FlatBuffer using b and returns the finished bytes.
@@ -66,50 +67,37 @@ func Marshal(b *flatbuffers.Builder, msg *MoveMsg) []byte {
 	}
 	velOff := b.EndVector(3)
 
-	// waypoints vector: repeated Vec3 tables (build each table first, collect offsets)
-	wpOffsets := make([]flatbuffers.UOffsetT, len(msg.Waypoints))
-	for i, wp := range msg.Waypoints {
-		wpOffsets[i] = buildVec3(b, wp)
+	// waypoints vector: repeated inline Vec3 structs
+	b.StartVector(12, len(msg.Waypoints), 4)
+	for i := len(msg.Waypoints) - 1; i >= 0; i-- {
+		buildVec3Struct(b, msg.Waypoints[i])
 	}
-	b.StartVector(4, len(wpOffsets), 4)
-	for i := len(wpOffsets) - 1; i >= 0; i-- {
-		b.PrependUOffsetT(wpOffsets[i])
-	}
-	wpVecOff := b.EndVector(len(wpOffsets))
-
-	// position table
-	posOff := buildVec3(b, msg.Position)
+	wpVecOff := b.EndVector(len(msg.Waypoints))
 
 	// 2. Build the MoveMessage table.
 	b.StartObject(8)
-	b.PrependUOffsetTSlot(slotPosition, posOff, 0)
-	b.PrependUOffsetTSlot(slotVelocity, velOff, 0)
-	b.PrependUOffsetTSlot(slotWaypoints, wpVecOff, 0)
-	b.PrependUint32Slot(slotPlayerID, msg.PlayerID, 0)
-	b.PrependBoolSlot(slotActive, msg.Active, false)
-	b.PrependBoolSlot(slotVisible, msg.Visible, false)
-	b.PrependBoolSlot(slotGhost, msg.Ghost, false)
 	b.PrependUOffsetTSlot(slotName, nameOff, 0)
+	b.PrependBoolSlot(slotGhost, msg.Ghost, false)
+	b.PrependBoolSlot(slotVisible, msg.Visible, false)
+	b.PrependBoolSlot(slotActive, msg.Active, false)
+	b.PrependUint32Slot(slotPlayerID, msg.PlayerID, 0)
+	b.PrependUOffsetTSlot(slotWaypoints, wpVecOff, 0)
+	b.PrependUOffsetTSlot(slotVelocity, velOff, 0)
+	posOff := buildVec3Struct(b, msg.Position)
+	b.PrependStructSlot(slotPosition, posOff, 0)
 	root := b.EndObject()
 
 	b.Finish(root)
 	return b.FinishedBytes()
 }
 
-// readVec3 reads a Vec3 from a table at the given absolute position in buf.
-func readVec3(buf []byte, tablePos flatbuffers.UOffsetT) Vec3 {
-	tab := flatbuffers.Table{Bytes: buf, Pos: tablePos}
-	var v Vec3
-	if o := tab.Offset(4); o != 0 { // slot 0 -> vtable offset 4
-		v.X = tab.GetFloat32(tab.Pos + flatbuffers.UOffsetT(o))
+// readVec3Struct reads a Vec3 struct at the given absolute position in buf.
+func readVec3Struct(buf []byte, pos flatbuffers.UOffsetT) Vec3 {
+	return Vec3{
+		X: flatbuffers.GetFloat32(buf[pos:]),
+		Y: flatbuffers.GetFloat32(buf[pos+4:]),
+		Z: flatbuffers.GetFloat32(buf[pos+8:]),
 	}
-	if o := tab.Offset(6); o != 0 { // slot 1 -> vtable offset 6
-		v.Y = tab.GetFloat32(tab.Pos + flatbuffers.UOffsetT(o))
-	}
-	if o := tab.Offset(8); o != 0 { // slot 2 -> vtable offset 8
-		v.Z = tab.GetFloat32(tab.Pos + flatbuffers.UOffsetT(o))
-	}
-	return v
 }
 
 // Unmarshal reads all fields from a finished FlatBuffer into out.
@@ -120,9 +108,7 @@ func Unmarshal(buf []byte, out *MoveMsg) {
 
 	// position (slot 0, vtable offset 4)
 	if o := tab.Offset(4); o != 0 {
-		absOff := tab.Pos + flatbuffers.UOffsetT(o)
-		posPos := tab.Indirect(absOff)
-		out.Position = readVec3(buf, posPos)
+		out.Position = readVec3Struct(buf, tab.Pos+flatbuffers.UOffsetT(o))
 	}
 
 	// velocity vector (slot 1, vtable offset 6)
@@ -139,10 +125,7 @@ func Unmarshal(buf []byte, out *MoveMsg) {
 		out.Waypoints = make([]Vec3, n)
 		vecStart := tab.Vector(flatbuffers.UOffsetT(o))
 		for i := 0; i < n; i++ {
-			// Each element is an UOffsetT pointing to the table.
-			elemOff := vecStart + flatbuffers.UOffsetT(i*4)
-			tablePos := elemOff + flatbuffers.GetUOffsetT(buf[elemOff:])
-			out.Waypoints[i] = readVec3(buf, tablePos)
+			out.Waypoints[i] = readVec3Struct(buf, vecStart+flatbuffers.UOffsetT(i*12))
 		}
 	}
 

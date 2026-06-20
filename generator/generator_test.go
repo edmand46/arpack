@@ -77,6 +77,13 @@ import (
 	"testing"
 )
 
+func vectorClose(a, b Vector3) bool {
+	const eps = float32(0.02)
+	return math.Abs(float64(a.X-b.X)) <= float64(eps) &&
+		math.Abs(float64(a.Y-b.Y)) <= float64(eps) &&
+		math.Abs(float64(a.Z-b.Z)) <= float64(eps)
+}
+
 func TestRoundTrip_Vector3(t *testing.T) {
 	orig := Vector3{X: 123.45, Y: -200.0, Z: 0.0}
 	buf := orig.Marshal(nil)
@@ -131,6 +138,40 @@ func TestRoundTrip_SpawnMessage(t *testing.T) {
 	}
 }
 
+func TestUnmarshal_ClearsReusedReferenceSliceTail(t *testing.T) {
+	long := SpawnMessage{
+		EntityID: 1,
+		Position: Vector3{X: 10, Y: 20, Z: 30},
+		Health:   100,
+		Tags:     []string{"keep", "drop"},
+		Data:     []uint8{1},
+	}
+	short := SpawnMessage{
+		EntityID: 2,
+		Position: Vector3{X: -10, Y: 0, Z: 30},
+		Health:   50,
+		Tags:     []string{"only"},
+		Data:     []uint8{2},
+	}
+
+	var got SpawnMessage
+	if _, err := got.Unmarshal(long.Marshal(nil)); err != nil {
+		t.Fatalf("Unmarshal long: %v", err)
+	}
+	if _, err := got.Unmarshal(short.Marshal(nil)); err != nil {
+		t.Fatalf("Unmarshal short: %v", err)
+	}
+	if len(got.Tags) != 1 || got.Tags[0] != "only" {
+		t.Fatalf("Tags after short decode = %#v, want [only]", got.Tags)
+	}
+	full := got.Tags[:cap(got.Tags)]
+	for i := len(got.Tags); i < len(full); i++ {
+		if full[i] != "" {
+			t.Fatalf("stale Tags tail at %d = %q, want cleared", i, full[i])
+		}
+	}
+}
+
 func TestRoundTrip_MoveMessage(t *testing.T) {
 	orig := MoveMessage{
 		Position:  Vector3{X: 100, Y: -50, Z: 0},
@@ -165,6 +206,41 @@ func TestRoundTrip_MoveMessage(t *testing.T) {
 	}
 	if len(got.Waypoints) != len(orig.Waypoints) {
 		t.Fatalf("Waypoints len: got %d, want %d", len(got.Waypoints), len(orig.Waypoints))
+	}
+	for i, want := range orig.Waypoints {
+		if !vectorClose(got.Waypoints[i], want) {
+			t.Errorf("Waypoints[%d]: got %#v, want %#v", i, got.Waypoints[i], want)
+		}
+	}
+}
+
+func TestUnmarshal_ReusesSliceCapacity(t *testing.T) {
+	orig := MoveMessage{
+		Position:  Vector3{X: 100, Y: -50, Z: 0},
+		Velocity:  [3]float32{1.5, -2.5, 0},
+		Waypoints: []Vector3{{X: 10, Y: 20, Z: 0}, {X: -10, Y: 0, Z: 100}},
+		PlayerID:  999,
+		Active:    true,
+		Visible:   false,
+		Ghost:     true,
+		Name:      "Alice",
+	}
+	buf := orig.Marshal(nil)
+	got := MoveMessage{Waypoints: make([]Vector3, 0, 8)}
+	_, err := got.Unmarshal(buf)
+	if err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if cap(got.Waypoints) != 8 {
+		t.Fatalf("Waypoints cap = %d, want reused cap 8", cap(got.Waypoints))
+	}
+	if len(got.Waypoints) != len(orig.Waypoints) {
+		t.Fatalf("Waypoints len: got %d, want %d", len(got.Waypoints), len(orig.Waypoints))
+	}
+	for i, want := range orig.Waypoints {
+		if !vectorClose(got.Waypoints[i], want) {
+			t.Errorf("Waypoints[%d]: got %#v, want %#v", i, got.Waypoints[i], want)
+		}
 	}
 }
 
@@ -233,12 +309,37 @@ func TestGenerateCSharp_Output(t *testing.T) {
 		}
 	}
 
-	// Unsafe паттерны
-	if !strings.Contains(code, "*(ushort*)ptr") {
-		t.Error("missing unsafe ushort pointer cast")
-	}
 	if !strings.Contains(code, "byte* ptr = buffer") {
 		t.Error("missing byte* ptr pattern")
+	}
+	for _, helper := range []string{
+		"WriteU16LE",
+		"ReadU16LE",
+		"WriteU32LE",
+		"ReadU32LE",
+		"WriteU64LE",
+		"ReadU64LE",
+		"WriteFloat32LE",
+		"ReadFloat32LE",
+		"EnsureFixedArray",
+	} {
+		if !strings.Contains(code, helper) {
+			t.Errorf("missing C# helper %s", helper)
+		}
+	}
+	for _, nativeCast := range []string{
+		"*(ushort*)ptr",
+		"*(short*)ptr",
+		"*(uint*)ptr",
+		"*(int*)ptr",
+		"*(ulong*)ptr",
+		"*(long*)ptr",
+		"*(float*)ptr",
+		"*(double*)ptr",
+	} {
+		if strings.Contains(code, nativeCast) {
+			t.Errorf("generated C# should not use native-endian pointer cast %q", nativeCast)
+		}
 	}
 
 	// Нет BinaryWriter
@@ -503,6 +604,20 @@ func TestGenerateCSharp_RuntimeGuards(t *testing.T) {
 					},
 				},
 			},
+			{
+				Name: "FixedGuarded",
+				Fields: []parser.Field{
+					{
+						Name:     "Values",
+						Kind:     parser.KindFixedArray,
+						FixedLen: 3,
+						Elem: &parser.Field{
+							Kind:      parser.KindPrimitive,
+							Primitive: parser.KindUint8,
+						},
+					},
+				},
+			},
 		},
 	}
 
@@ -534,39 +649,60 @@ unsafe class Program
         Emit("TRUNC", () =>
         {
             byte[] data = Array.Empty<byte>();
-            fixed (byte* ptr = data)
-            {
-                Guarded.Deserialize(ptr, data.Length, out Guarded _);
-            }
+            Guarded.Deserialize(data, out Guarded _);
         });
 
         Emit("LEN", () =>
         {
             var msg = new Guarded { Name = new string('a', 65536) };
             byte[] data = new byte[2];
-            fixed (byte* ptr = data)
-            {
-                msg.Serialize(ptr, data.Length);
-            }
+            msg.Serialize(data);
         });
 
         Emit("QUANT", () =>
         {
             var msg = new Guarded { Ratio = 2f };
             byte[] data = new byte[4];
-            fixed (byte* ptr = data)
-            {
-                msg.Serialize(ptr, data.Length);
-            }
+            msg.Serialize(data);
         });
 
         Emit("OVERFLOW", () =>
         {
             var msg = new Guarded { Name = "hello", Ratio = 0.5f };
             byte[] data = new byte[3];
-            fixed (byte* ptr = data)
+            msg.Serialize(data);
+        });
+
+        Emit("FIXED_NULL", () =>
+        {
+            var msg = new FixedGuarded();
+            byte[] data = new byte[3];
+            msg.Serialize(data);
+        });
+
+        Emit("FIXED_SHORT", () =>
+        {
+            var msg = new FixedGuarded { Values = new byte[] { 1, 2 } };
+            byte[] data = new byte[3];
+            msg.Serialize(data);
+        });
+
+        Emit("FIXED_LONG", () =>
+        {
+            var msg = new FixedGuarded { Values = new byte[] { 1, 2, 3, 4 } };
+            byte[] data = new byte[4];
+            msg.Serialize(data);
+        });
+
+        Emit("SPAN_OK", () =>
+        {
+            var msg = new Guarded { Name = "ok", Ratio = 0.5f };
+            byte[] data = new byte[16];
+            int n = msg.Serialize(data);
+            int consumed = Guarded.Deserialize(new ReadOnlySpan<byte>(data, 0, n), out Guarded decoded);
+            if (consumed != n || decoded.Name != "ok")
             {
-                msg.Serialize(ptr, data.Length);
+                throw new Exception("span roundtrip failed");
             }
         });
     }
@@ -574,8 +710,8 @@ unsafe class Program
 `)
 
 	lines := strings.Split(strings.TrimSpace(out), "\n")
-	if len(lines) != 4 {
-		t.Fatalf("expected 4 output lines, got %d: %q", len(lines), out)
+	if len(lines) != 8 {
+		t.Fatalf("expected 8 output lines, got %d: %q", len(lines), out)
 	}
 	if !strings.Contains(lines[0], "ArgumentException:arpack: buffer too short for string length for Name") {
 		t.Fatalf("expected truncated-input guard, got %q", lines[0])
@@ -588,6 +724,18 @@ unsafe class Program
 	}
 	if !strings.Contains(lines[3], "ArgumentException:arpack: buffer too small for string data for Name") {
 		t.Fatalf("expected serialize write-bounds guard, got %q", lines[3])
+	}
+	if !strings.Contains(lines[4], "InvalidOperationException:arpack: fixed array for Values is null; expected length 3") {
+		t.Fatalf("expected fixed-array null guard, got %q", lines[4])
+	}
+	if !strings.Contains(lines[5], "InvalidOperationException:arpack: fixed array for Values length mismatch: expected 3, got 2") {
+		t.Fatalf("expected fixed-array short guard, got %q", lines[5])
+	}
+	if !strings.Contains(lines[6], "InvalidOperationException:arpack: fixed array for Values length mismatch: expected 3, got 4") {
+		t.Fatalf("expected fixed-array long guard, got %q", lines[6])
+	}
+	if lines[7] != "SPAN_OK:OK" {
+		t.Fatalf("expected span roundtrip, got %q", lines[7])
 	}
 }
 
