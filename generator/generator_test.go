@@ -37,6 +37,14 @@ func TestGenerateGo_Compiles(t *testing.T) {
 			t.Errorf("missing Unmarshal for %s", name)
 		}
 	}
+	for _, nestedCall := range []string{
+		"m.Position.Unmarshal(data[offset:])",
+		"m.Waypoints[_iWaypoints].Unmarshal(data[offset:])",
+	} {
+		if strings.Contains(code, nestedCall) {
+			t.Errorf("generated Go should inline fixed-size nested decode, found %q", nestedCall)
+		}
+	}
 
 	t.Logf("Generated Go (%d bytes):\n%s", len(src), code)
 }
@@ -244,6 +252,44 @@ func TestUnmarshal_ReusesSliceCapacity(t *testing.T) {
 	}
 }
 
+func TestUnmarshal_ReusesEqualStringStorage(t *testing.T) {
+	orig := MoveMessage{
+		Position:  Vector3{X: 100, Y: -50, Z: 0},
+		Velocity:  [3]float32{1.5, -2.5, 0},
+		Waypoints: []Vector3{{X: 10, Y: 20, Z: 0}, {X: -10, Y: 0, Z: 100}},
+		PlayerID:  999,
+		Active:    true,
+		Visible:   false,
+		Ghost:     true,
+		Name:      "Alice",
+	}
+	buf := orig.Marshal(nil)
+	got := MoveMessage{Waypoints: make([]Vector3, 0, 8)}
+	if _, err := got.Unmarshal(buf); err != nil {
+		t.Fatalf("Unmarshal warmup: %v", err)
+	}
+
+	allocs := testing.AllocsPerRun(1000, func() {
+		if _, err := got.Unmarshal(buf); err != nil {
+			panic(err)
+		}
+	})
+	if allocs != 0 {
+		t.Fatalf("repeated equal-string Unmarshal allocations = %v, want 0", allocs)
+	}
+
+	changed := orig
+	changed.Name = "Bob"
+	changedBuf := changed.Marshal(nil)
+	if _, err := got.Unmarshal(changedBuf); err != nil {
+		t.Fatalf("Unmarshal changed: %v", err)
+	}
+	changedBuf[len(changedBuf)-1] = 'X'
+	if got.Name != "Bob" {
+		t.Fatalf("decoded string aliases input buffer or decoded incorrectly: got %q, want Bob", got.Name)
+	}
+}
+
 func TestRoundTrip_EnvelopeMessage(t *testing.T) {
 	orig := EnvelopeMessage{
 		Code:    OpcodeJoinRoom,
@@ -281,6 +327,317 @@ func TestRoundTrip_EnvelopeMessage(t *testing.T) {
 		t.Fatalf("go test failed:\n%s", out)
 	}
 	t.Logf("go test output:\n%s", out)
+}
+
+func TestGenerateGo_UnmarshalReusesIdenticalString(t *testing.T) {
+	schemaSrc := `package messages
+
+type StringMessage struct {
+	Name string
+}
+`
+
+	schema, err := parser.ParseSchemaSource(schemaSrc)
+	if err != nil {
+		t.Fatalf("ParseSchemaSource: %v", err)
+	}
+
+	src, err := GenerateGoSchema(schema, "messages")
+	if err != nil {
+		t.Fatalf("GenerateGoSchema: %v", err)
+	}
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "messages.go"), []byte(schemaSrc), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "messages_arpack.go"), src, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	runtimeTests := `package messages
+
+import (
+	"encoding/binary"
+	"testing"
+)
+
+func TestRepeatedIdenticalStringDecodeAvoidsAllocation(t *testing.T) {
+	sameMsg := StringMessage{Name: "PlayerOne"}
+	changedMsg := StringMessage{Name: "Different"}
+	same := sameMsg.Marshal(nil)
+	changed := changedMsg.Marshal(nil)
+
+	var got StringMessage
+	if _, err := got.Unmarshal(same); err != nil {
+		t.Fatalf("initial Unmarshal: %v", err)
+	}
+
+	allocs := testing.AllocsPerRun(1000, func() {
+		if _, err := got.Unmarshal(same); err != nil {
+			panic(err)
+		}
+	})
+	if allocs != 0 {
+		t.Fatalf("identical string decode allocations = %v, want 0", allocs)
+	}
+
+	if _, err := got.Unmarshal(changed); err != nil {
+		t.Fatalf("changed Unmarshal: %v", err)
+	}
+	if got.Name != "Different" {
+		t.Fatalf("changed decode Name = %q, want Different", got.Name)
+	}
+
+	nameLen := int(binary.LittleEndian.Uint16(changed))
+	for i := 0; i < nameLen; i++ {
+		changed[2+i] = 'x'
+	}
+	if got.Name != "Different" {
+		t.Fatalf("changed decode reused input buffer; Name = %q", got.Name)
+	}
+}
+`
+	if err := os.WriteFile(filepath.Join(dir, "string_reuse_test.go"), []byte(runtimeTests), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	goMod := "module messages\n\ngo 1.21\n"
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(goMod), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command("go", "test", "./...")
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("go test failed:\n%s", out)
+	}
+}
+
+func TestGenerateGo_NestedBoolCollections(t *testing.T) {
+	schemaSrc := `package messages
+
+type Flags struct {
+	A bool
+	B bool
+}
+
+type Batch struct {
+	Fixed [2]Flags
+	Items []Flags
+}
+`
+
+	schema, err := parser.ParseSchemaSource(schemaSrc)
+	if err != nil {
+		t.Fatalf("ParseSchemaSource: %v", err)
+	}
+
+	src, err := GenerateGoSchema(schema, "messages")
+	if err != nil {
+		t.Fatalf("GenerateGoSchema: %v", err)
+	}
+
+	code := string(src)
+	for _, want := range []string{
+		"m.Fixed[_iFixed].Unmarshal(data[offset:])",
+		"m.Items[_iItems].Unmarshal(data[offset:])",
+	} {
+		if !strings.Contains(code, want) {
+			t.Fatalf("nested bool collections should use safe nested Unmarshal path, missing %q in:\n%s", want, code)
+		}
+	}
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "messages.go"), []byte(schemaSrc), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "messages_arpack.go"), src, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	runtimeTests := `package messages
+
+import "testing"
+
+func TestNestedBoolCollectionsRoundTrip(t *testing.T) {
+	orig := Batch{
+		Fixed: [2]Flags{{A: true, B: false}, {A: false, B: true}},
+		Items: []Flags{{A: true, B: true}, {A: false, B: false}},
+	}
+	buf := orig.Marshal(nil)
+
+	var got Batch
+	n, err := got.Unmarshal(buf)
+	if err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if n != len(buf) {
+		t.Fatalf("consumed %d bytes, want %d", n, len(buf))
+	}
+	if got.Fixed != orig.Fixed {
+		t.Fatalf("Fixed = %#v, want %#v", got.Fixed, orig.Fixed)
+	}
+	if len(got.Items) != len(orig.Items) {
+		t.Fatalf("Items len = %d, want %d", len(got.Items), len(orig.Items))
+	}
+	for i := range orig.Items {
+		if got.Items[i] != orig.Items[i] {
+			t.Fatalf("Items[%d] = %#v, want %#v", i, got.Items[i], orig.Items[i])
+		}
+	}
+	if _, err := got.Unmarshal(buf[:len(buf)-1]); err == nil {
+		t.Fatal("truncated Unmarshal returned nil error")
+	}
+}
+`
+	if err := os.WriteFile(filepath.Join(dir, "nested_bool_test.go"), []byte(runtimeTests), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	goMod := "module messages\n\ngo 1.21\n"
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(goMod), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command("go", "test", "./...")
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("go test failed:\n%s", out)
+	}
+}
+
+func TestGenerateGo_NestedFallbacks(t *testing.T) {
+	schemaSrc := `package messages
+
+type Flags struct {
+	A bool
+	B bool
+}
+
+type Payload struct {
+	Name string
+	Data []uint8
+}
+
+type Outer struct {
+	Flags    Flags
+	Payload  Payload
+	Payloads [2]Payload
+	Items    []Payload
+}
+`
+
+	schema, err := parser.ParseSchemaSource(schemaSrc)
+	if err != nil {
+		t.Fatalf("ParseSchemaSource: %v", err)
+	}
+
+	src, err := GenerateGoSchema(schema, "messages")
+	if err != nil {
+		t.Fatalf("GenerateGoSchema: %v", err)
+	}
+
+	code := string(src)
+	for _, want := range []string{
+		"m.Flags.Unmarshal(data[offset:])",
+		"m.Payload.Unmarshal(data[offset:])",
+		"m.Payloads[_iPayloads].Unmarshal(data[offset:])",
+		"m.Items[_iItems].Unmarshal(data[offset:])",
+	} {
+		if !strings.Contains(code, want) {
+			t.Fatalf("nested fallback path missing %q in:\n%s", want, code)
+		}
+	}
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "messages.go"), []byte(schemaSrc), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "messages_arpack.go"), src, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	runtimeTests := `package messages
+
+import "testing"
+
+func equalPayload(a, b Payload) bool {
+	if a.Name != b.Name || len(a.Data) != len(b.Data) {
+		return false
+	}
+	for i := range a.Data {
+		if a.Data[i] != b.Data[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func TestNestedFallbacksRoundTrip(t *testing.T) {
+	orig := Outer{
+		Flags: Flags{A: true, B: false},
+		Payload: Payload{Name: "direct", Data: []uint8{1, 2}},
+		Payloads: [2]Payload{
+			{Name: "fixed-a", Data: []uint8{3}},
+			{Name: "fixed-b", Data: []uint8{4, 5}},
+		},
+		Items: []Payload{
+			{Name: "slice-a", Data: []uint8{6}},
+			{Name: "slice-b", Data: []uint8{7, 8, 9}},
+		},
+	}
+	buf := orig.Marshal(nil)
+
+	var got Outer
+	n, err := got.Unmarshal(buf)
+	if err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if n != len(buf) {
+		t.Fatalf("consumed %d bytes, want %d", n, len(buf))
+	}
+	if got.Flags != orig.Flags {
+		t.Fatalf("Flags = %#v, want %#v", got.Flags, orig.Flags)
+	}
+	if !equalPayload(got.Payload, orig.Payload) {
+		t.Fatalf("Payload = %#v, want %#v", got.Payload, orig.Payload)
+	}
+	for i := range orig.Payloads {
+		if !equalPayload(got.Payloads[i], orig.Payloads[i]) {
+			t.Fatalf("Payloads[%d] = %#v, want %#v", i, got.Payloads[i], orig.Payloads[i])
+		}
+	}
+	if len(got.Items) != len(orig.Items) {
+		t.Fatalf("Items len = %d, want %d", len(got.Items), len(orig.Items))
+	}
+	for i := range orig.Items {
+		if !equalPayload(got.Items[i], orig.Items[i]) {
+			t.Fatalf("Items[%d] = %#v, want %#v", i, got.Items[i], orig.Items[i])
+		}
+	}
+	if _, err := got.Unmarshal(buf[:len(buf)-1]); err == nil {
+		t.Fatal("truncated Unmarshal returned nil error")
+	}
+}
+`
+	if err := os.WriteFile(filepath.Join(dir, "nested_fallbacks_test.go"), []byte(runtimeTests), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	goMod := "module messages\n\ngo 1.21\n"
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(goMod), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command("go", "test", "./...")
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("go test failed:\n%s", out)
+	}
 }
 
 func TestGenerateCSharp_Output(t *testing.T) {

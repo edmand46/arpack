@@ -14,6 +14,13 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+var (
+	sinkBytes           []byte
+	sinkArpackMove      arpackmsg.MoveMessage
+	sinkProtoMove       benchpb.MoveMessage
+	sinkFlatBuffersMove benchfbs.MoveMsg
+)
+
 // testMoveArpack returns a fully populated arpackmsg.MoveMessage for benchmarks.
 func testMoveArpack() arpackmsg.MoveMessage {
 	return arpackmsg.MoveMessage{
@@ -145,7 +152,7 @@ func BenchmarkArPack_Marshal(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		out = msg.Marshal(out[:0])
 	}
-	_ = out
+	sinkBytes = out
 }
 
 func BenchmarkArPack_Unmarshal(b *testing.B) {
@@ -159,10 +166,12 @@ func BenchmarkArPack_Unmarshal(b *testing.B) {
 
 	var out arpackmsg.MoveMessage
 	for i := 0; i < b.N; i++ {
+		out = arpackmsg.MoveMessage{}
 		if _, err := out.Unmarshal(buf); err != nil {
 			b.Fatal(err)
 		}
 	}
+	sinkArpackMove = out
 }
 
 // --- Protobuf benchmarks ---
@@ -186,7 +195,7 @@ func BenchmarkProto_Marshal(b *testing.B) {
 			b.Fatal(err)
 		}
 	}
-	_ = out
+	sinkBytes = out
 }
 
 func BenchmarkProto_Unmarshal(b *testing.B) {
@@ -208,6 +217,7 @@ func BenchmarkProto_Unmarshal(b *testing.B) {
 			b.Fatal(err)
 		}
 	}
+	sinkProtoMove = out
 }
 
 // --- FlatBuffers benchmarks ---
@@ -222,9 +232,11 @@ func BenchmarkFlatBuffers_Marshal(b *testing.B) {
 	b.SetBytes(int64(wireSize))
 	b.ResetTimer()
 
+	var out []byte
 	for i := 0; i < b.N; i++ {
-		benchfbs.Marshal(builder, msg)
+		out = benchfbs.Marshal(builder, msg)
 	}
+	sinkBytes = out
 }
 
 func BenchmarkFlatBuffers_Unmarshal(b *testing.B) {
@@ -242,5 +254,5 @@ func BenchmarkFlatBuffers_Unmarshal(b *testing.B) {
 		out = benchfbs.MoveMsg{}
 		benchfbs.Unmarshal(buf, &out)
 	}
-	_ = out
+	sinkFlatBuffersMove = out
 }

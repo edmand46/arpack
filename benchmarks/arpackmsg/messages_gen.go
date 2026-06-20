@@ -15,6 +15,18 @@ func arpackEnsureUint16Length(length int, context string) uint16 {
 	return uint16(length)
 }
 
+func arpackStringEqualBytes(s string, data []byte) bool {
+	if len(s) != len(data) {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] != data[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func (m *Vector3) Marshal(buf []byte) []byte {
 	buf = binary.LittleEndian.AppendUint32(buf, math.Float32bits(m.X))
 	buf = binary.LittleEndian.AppendUint32(buf, math.Float32bits(m.Y))
@@ -76,15 +88,19 @@ func (m *MoveMessage) Unmarshal(data []byte) (int, error) {
 		return 0, errors.New("arpack: buffer too short for MoveMessage")
 	}
 	offset := 0
-	_nPosition, _err := m.Position.Unmarshal(data[offset:])
-	if _err != nil {
-		return 0, _err
+	if len(data) < offset+12 {
+		return 0, errors.New("arpack: buffer too short")
 	}
-	offset += _nPosition
+	m.Position.X = math.Float32frombits(binary.LittleEndian.Uint32(data[offset:]))
+	offset += 4
+	m.Position.Y = math.Float32frombits(binary.LittleEndian.Uint32(data[offset:]))
+	offset += 4
+	m.Position.Z = math.Float32frombits(binary.LittleEndian.Uint32(data[offset:]))
+	offset += 4
+	if len(data) < offset+12 {
+		return 0, errors.New("arpack: buffer too short")
+	}
 	for _iVelocity := 0; _iVelocity < 3; _iVelocity++ {
-		if len(data) < offset+4 {
-			return 0, errors.New("arpack: buffer too short")
-		}
 		m.Velocity[_iVelocity] = math.Float32frombits(binary.LittleEndian.Uint32(data[offset:]))
 		offset += 4
 	}
@@ -98,12 +114,16 @@ func (m *MoveMessage) Unmarshal(data []byte) (int, error) {
 	} else {
 		m.Waypoints = m.Waypoints[:_lenWaypoints]
 	}
+	if offset > len(data) || _lenWaypoints > (len(data)-offset)/12 {
+		return 0, errors.New("arpack: buffer too short")
+	}
 	for _iWaypoints := 0; _iWaypoints < _lenWaypoints; _iWaypoints++ {
-		_nWaypoints__iWaypoints_, _err := m.Waypoints[_iWaypoints].Unmarshal(data[offset:])
-		if _err != nil {
-			return 0, _err
-		}
-		offset += _nWaypoints__iWaypoints_
+		m.Waypoints[_iWaypoints].X = math.Float32frombits(binary.LittleEndian.Uint32(data[offset:]))
+		offset += 4
+		m.Waypoints[_iWaypoints].Y = math.Float32frombits(binary.LittleEndian.Uint32(data[offset:]))
+		offset += 4
+		m.Waypoints[_iWaypoints].Z = math.Float32frombits(binary.LittleEndian.Uint32(data[offset:]))
+		offset += 4
 	}
 	if len(data) < offset+4 {
 		return 0, errors.New("arpack: buffer too short")
@@ -126,7 +146,10 @@ func (m *MoveMessage) Unmarshal(data []byte) (int, error) {
 	if len(data) < offset+_slenm_Name {
 		return 0, errors.New("arpack: buffer too short")
 	}
-	m.Name = string(data[offset : offset+_slenm_Name])
+	_bm_Name := data[offset : offset+_slenm_Name]
+	if !arpackStringEqualBytes(m.Name, _bm_Name) {
+		m.Name = string(_bm_Name)
+	}
 	offset += _slenm_Name
 	return offset, nil
 }
@@ -157,11 +180,15 @@ func (m *SpawnMessage) Unmarshal(data []byte) (int, error) {
 	}
 	m.EntityID = binary.LittleEndian.Uint64(data[offset:])
 	offset += 8
-	_nPosition, _err := m.Position.Unmarshal(data[offset:])
-	if _err != nil {
-		return 0, _err
+	if len(data) < offset+12 {
+		return 0, errors.New("arpack: buffer too short")
 	}
-	offset += _nPosition
+	m.Position.X = math.Float32frombits(binary.LittleEndian.Uint32(data[offset:]))
+	offset += 4
+	m.Position.Y = math.Float32frombits(binary.LittleEndian.Uint32(data[offset:]))
+	offset += 4
+	m.Position.Z = math.Float32frombits(binary.LittleEndian.Uint32(data[offset:]))
+	offset += 4
 	if len(data) < offset+2 {
 		return 0, errors.New("arpack: buffer too short")
 	}
@@ -189,7 +216,10 @@ func (m *SpawnMessage) Unmarshal(data []byte) (int, error) {
 		if len(data) < offset+_slenm_Tags__iTags_ {
 			return 0, errors.New("arpack: buffer too short")
 		}
-		m.Tags[_iTags] = string(data[offset : offset+_slenm_Tags__iTags_])
+		_bm_Tags__iTags_ := data[offset : offset+_slenm_Tags__iTags_]
+		if !arpackStringEqualBytes(m.Tags[_iTags], _bm_Tags__iTags_) {
+			m.Tags[_iTags] = string(_bm_Tags__iTags_)
+		}
 		offset += _slenm_Tags__iTags_
 	}
 	if len(data) < offset+2 {
@@ -202,10 +232,10 @@ func (m *SpawnMessage) Unmarshal(data []byte) (int, error) {
 	} else {
 		m.Data = m.Data[:_lenData]
 	}
+	if offset > len(data) || _lenData > (len(data)-offset)/1 {
+		return 0, errors.New("arpack: buffer too short")
+	}
 	for _iData := 0; _iData < _lenData; _iData++ {
-		if len(data) < offset+1 {
-			return 0, errors.New("arpack: buffer too short")
-		}
 		m.Data[_iData] = data[offset]
 		offset += 1
 	}

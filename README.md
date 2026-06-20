@@ -146,15 +146,15 @@ local decoded, bytes_read = messages.deserialize_move_message(data)
 Recent Go results on Apple M3 Max:
 
 ```text
-BenchmarkArPack_Marshal-16             9.35-9.54 ns/op     0 B/op    0 allocs/op
-BenchmarkArPack_Unmarshal-16          21.04-21.75 ns/op   16 B/op    1 allocs/op
-BenchmarkProto_Marshal-16            170.9-175.1 ns/op     0 B/op    0 allocs/op
-BenchmarkProto_Unmarshal-16          264.1-280.8 ns/op   248 B/op    7 allocs/op
-BenchmarkFlatBuffers_Marshal-16      141.9-145.8 ns/op     0 B/op    0 allocs/op
-BenchmarkFlatBuffers_Unmarshal-16     40.94-41.51 ns/op   24 B/op    1 allocs/op
+BenchmarkArPack_Marshal-16                         9.36-9.43 ns/op     0 B/op    0 allocs/op
+BenchmarkArPack_Unmarshal-16                      32.57-33.00 ns/op   40 B/op    2 allocs/op
+BenchmarkProto_Marshal-16                         182.8-183.9 ns/op    0 B/op    0 allocs/op
+BenchmarkProto_Unmarshal-16                       275.8-281.6 ns/op  248 B/op    7 allocs/op
+BenchmarkFlatBuffers_Marshal-16                   143.6-144.5 ns/op    0 B/op    0 allocs/op
+BenchmarkFlatBuffers_Unmarshal-16                  40.48-41.64 ns/op   24 B/op    1 allocs/op
 ```
 
-These results use a full-float sample schema for all formats. Marshal benchmarks reuse caller-owned buffers/builders where the library supports it. Unmarshal benchmarks materialize the decoded message into Go structs for a comparable consumer-facing result. The FlatBuffers baseline is a hand-written encoding using the FlatBuffers Go runtime with inline `struct Vec3` values.
+These results use a full-float sample schema for all formats. Marshal benchmarks reuse caller-owned buffers/builders where the library supports it. Unmarshal benchmarks materialize a fresh decoded message on each iteration. The FlatBuffers baseline is a hand-written encoding using the FlatBuffers Go runtime with inline `struct Vec3` values.
 
 | Format | Encoded size |
 | --- | ---: |

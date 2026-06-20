@@ -51,6 +51,20 @@ func GenerateGoSchema(schema parser.Schema, pkgName string) ([]byte, error) {
 		b.WriteString("}\n\n")
 	}
 
+	if schemaNeedsStringReuse(messages) {
+		b.WriteString("func arpackStringEqualBytes(s string, data []byte) bool {\n")
+		b.WriteString("\tif len(s) != len(data) {\n")
+		b.WriteString("\t\treturn false\n")
+		b.WriteString("\t}\n")
+		b.WriteString("\tfor i := 0; i < len(s); i++ {\n")
+		b.WriteString("\t\tif s[i] != data[i] {\n")
+		b.WriteString("\t\t\treturn false\n")
+		b.WriteString("\t\t}\n")
+		b.WriteString("\t}\n")
+		b.WriteString("\treturn true\n")
+		b.WriteString("}\n\n")
+	}
+
 	messageIndex := make(map[string]parser.Message, len(messages))
 	for _, msg := range messages {
 		messageIndex[msg.Name] = msg
@@ -227,13 +241,43 @@ func writeGoUnmarshalField(b *strings.Builder, recv string, f parser.Field, inde
 		return writeGoUnmarshalPrimitive(b, access, f, indent)
 
 	case parser.KindNested:
-		nVar := "_n" + sanitizeVarName(f.Name)
-		fmt.Fprintf(b, "%s%s, _err := %s.Unmarshal(data[offset:])\n", indent, nVar, access)
-		fmt.Fprintf(b, "%sif _err != nil { return 0, _err }\n", indent)
-		fmt.Fprintf(b, "%soffset += %s\n", indent, nVar)
+		if goCanInlineNestedUnmarshal(f.TypeName, messageIndex, nil) {
+			size := goFixedWireSize(f, messageIndex, nil)
+			if size <= 0 {
+				return fmt.Errorf("inline nested %s has no fixed wire size", f.TypeName)
+			}
+			fmt.Fprintf(b, "%sif len(data) < offset+%d { return 0, errors.New(\"arpack: buffer too short\") }\n", indent, size)
+			if err := writeGoUnmarshalFixedFieldUnchecked(b, recv, f, indent, messageIndex); err != nil {
+				return err
+			}
+		} else {
+			nVar := "_n" + sanitizeVarName(f.Name)
+			fmt.Fprintf(b, "%s%s, _err := %s.Unmarshal(data[offset:])\n", indent, nVar, access)
+			fmt.Fprintf(b, "%sif _err != nil { return 0, _err }\n", indent)
+			fmt.Fprintf(b, "%soffset += %s\n", indent, nVar)
+		}
 
 	case parser.KindFixedArray:
 		iVar := "_i" + f.Name
+		if size := goFixedWireSize(f, messageIndex, nil); size > 0 && goCanUncheckedFixedField(f, messageIndex, nil) {
+			fmt.Fprintf(b, "%sif len(data) < offset+%d { return 0, errors.New(\"arpack: buffer too short\") }\n", indent, size)
+			fmt.Fprintf(b, "%sfor %s := 0; %s < %d; %s++ {\n", indent, iVar, iVar, f.FixedLen, iVar)
+			elemField := parser.Field{
+				Name:      f.Name + "[" + iVar + "]",
+				Kind:      f.Elem.Kind,
+				Primitive: f.Elem.Primitive,
+				NamedType: f.Elem.NamedType,
+				Quant:     f.Elem.Quant,
+				TypeName:  f.Elem.TypeName,
+				Elem:      f.Elem.Elem,
+				FixedLen:  f.Elem.FixedLen,
+			}
+			if err := writeGoUnmarshalFixedFieldUnchecked(b, recv, elemField, indent+"\t", messageIndex); err != nil {
+				return err
+			}
+			fmt.Fprintf(b, "%s}\n", indent)
+			break
+		}
 		fmt.Fprintf(b, "%sfor %s := 0; %s < %d; %s++ {\n", indent, iVar, iVar, f.FixedLen, iVar)
 		elemField := parser.Field{
 			Name:      f.Name + "[" + iVar + "]",
@@ -265,7 +309,6 @@ func writeGoUnmarshalField(b *strings.Builder, recv string, f parser.Field, inde
 		fmt.Fprintf(b, "%s\t%s = %s[:%s]\n", indent, access, access, lenVar)
 		fmt.Fprintf(b, "%s}\n", indent)
 		iVar := "_i" + sanitizeVarName(f.Name)
-		fmt.Fprintf(b, "%sfor %s := 0; %s < %s; %s++ {\n", indent, iVar, iVar, lenVar, iVar)
 		elemField := parser.Field{
 			Name:      f.Name + "[" + iVar + "]",
 			Kind:      f.Elem.Kind,
@@ -276,11 +319,123 @@ func writeGoUnmarshalField(b *strings.Builder, recv string, f parser.Field, inde
 			Elem:      f.Elem.Elem,
 			FixedLen:  f.Elem.FixedLen,
 		}
-		if err := writeGoUnmarshalField(b, recv, elemField, indent+"\t", messageIndex); err != nil {
+		if elemSize := goFixedWireSize(*f.Elem, messageIndex, nil); elemSize > 0 && goCanUncheckedFixedField(*f.Elem, messageIndex, nil) {
+			fmt.Fprintf(b, "%sif offset > len(data) || %s > (len(data)-offset)/%d { return 0, errors.New(\"arpack: buffer too short\") }\n",
+				indent, lenVar, elemSize)
+			fmt.Fprintf(b, "%sfor %s := 0; %s < %s; %s++ {\n", indent, iVar, iVar, lenVar, iVar)
+			if err := writeGoUnmarshalFixedFieldUnchecked(b, recv, elemField, indent+"\t", messageIndex); err != nil {
+				return err
+			}
+			fmt.Fprintf(b, "%s}\n", indent)
+		} else {
+			fmt.Fprintf(b, "%sfor %s := 0; %s < %s; %s++ {\n", indent, iVar, iVar, lenVar, iVar)
+			if err := writeGoUnmarshalField(b, recv, elemField, indent+"\t", messageIndex); err != nil {
+				return err
+			}
+			fmt.Fprintf(b, "%s}\n", indent)
+		}
+	}
+	return nil
+}
+
+func writeGoUnmarshalFixedFieldUnchecked(b *strings.Builder, recv string, f parser.Field, indent string, messageIndex map[string]parser.Message) error {
+	access := recv + "." + f.Name
+	switch f.Kind {
+	case parser.KindPrimitive:
+		return writeGoUnmarshalFixedPrimitiveUnchecked(b, access, f, indent)
+	case parser.KindNested:
+		msg, ok := messageIndex[f.TypeName]
+		if !ok {
+			return fmt.Errorf("unknown nested type %s", f.TypeName)
+		}
+		for _, seg := range segmentFields(msg.Fields) {
+			if seg.single != nil {
+				if err := writeGoUnmarshalFixedFieldUnchecked(b, access, *seg.single, indent, messageIndex); err != nil {
+					return err
+				}
+				continue
+			}
+			return fmt.Errorf("cannot unchecked-inline bool group in %s", f.TypeName)
+		}
+	case parser.KindFixedArray:
+		iVar := "_i" + f.Name
+		fmt.Fprintf(b, "%sfor %s := 0; %s < %d; %s++ {\n", indent, iVar, iVar, f.FixedLen, iVar)
+		elemField := parser.Field{
+			Name:      f.Name + "[" + iVar + "]",
+			Kind:      f.Elem.Kind,
+			Primitive: f.Elem.Primitive,
+			NamedType: f.Elem.NamedType,
+			Quant:     f.Elem.Quant,
+			TypeName:  f.Elem.TypeName,
+			Elem:      f.Elem.Elem,
+			FixedLen:  f.Elem.FixedLen,
+		}
+		if err := writeGoUnmarshalFixedFieldUnchecked(b, recv, elemField, indent+"\t", messageIndex); err != nil {
 			return err
 		}
 		fmt.Fprintf(b, "%s}\n", indent)
+	default:
+		return fmt.Errorf("field %s is not fixed-size", f.Name)
 	}
+	return nil
+}
+
+func writeGoUnmarshalFixedPrimitiveUnchecked(b *strings.Builder, access string, f parser.Field, indent string) error {
+	if f.Quant != nil {
+		return writeGoUnmarshalFixedQuantUnchecked(b, access, f, indent)
+	}
+	switch f.Primitive {
+	case parser.KindFloat32:
+		fmt.Fprintf(b, "%s%s = %s\n", indent, access, goUnmarshalValueExpr("math.Float32frombits(binary.LittleEndian.Uint32(data[offset:]))", f))
+		fmt.Fprintf(b, "%soffset += 4\n", indent)
+	case parser.KindFloat64:
+		fmt.Fprintf(b, "%s%s = %s\n", indent, access, goUnmarshalValueExpr("math.Float64frombits(binary.LittleEndian.Uint64(data[offset:]))", f))
+		fmt.Fprintf(b, "%soffset += 8\n", indent)
+	case parser.KindInt8:
+		fmt.Fprintf(b, "%s%s = %s\n", indent, access, goUnmarshalValueExpr("int8(data[offset])", f))
+		fmt.Fprintf(b, "%soffset += 1\n", indent)
+	case parser.KindUint8:
+		fmt.Fprintf(b, "%s%s = %s\n", indent, access, goUnmarshalValueExpr("data[offset]", f))
+		fmt.Fprintf(b, "%soffset += 1\n", indent)
+	case parser.KindBool:
+		fmt.Fprintf(b, "%s%s = %s\n", indent, access, goUnmarshalValueExpr("data[offset] != 0", f))
+		fmt.Fprintf(b, "%soffset += 1\n", indent)
+	case parser.KindInt16:
+		fmt.Fprintf(b, "%s%s = %s\n", indent, access, goUnmarshalValueExpr("int16(binary.LittleEndian.Uint16(data[offset:]))", f))
+		fmt.Fprintf(b, "%soffset += 2\n", indent)
+	case parser.KindUint16:
+		fmt.Fprintf(b, "%s%s = %s\n", indent, access, goUnmarshalValueExpr("binary.LittleEndian.Uint16(data[offset:])", f))
+		fmt.Fprintf(b, "%soffset += 2\n", indent)
+	case parser.KindInt32:
+		fmt.Fprintf(b, "%s%s = %s\n", indent, access, goUnmarshalValueExpr("int32(binary.LittleEndian.Uint32(data[offset:]))", f))
+		fmt.Fprintf(b, "%soffset += 4\n", indent)
+	case parser.KindUint32:
+		fmt.Fprintf(b, "%s%s = %s\n", indent, access, goUnmarshalValueExpr("binary.LittleEndian.Uint32(data[offset:])", f))
+		fmt.Fprintf(b, "%soffset += 4\n", indent)
+	case parser.KindInt64:
+		fmt.Fprintf(b, "%s%s = %s\n", indent, access, goUnmarshalValueExpr("int64(binary.LittleEndian.Uint64(data[offset:]))", f))
+		fmt.Fprintf(b, "%soffset += 8\n", indent)
+	case parser.KindUint64:
+		fmt.Fprintf(b, "%s%s = %s\n", indent, access, goUnmarshalValueExpr("binary.LittleEndian.Uint64(data[offset:])", f))
+		fmt.Fprintf(b, "%soffset += 8\n", indent)
+	default:
+		return fmt.Errorf("primitive %s is not fixed-size", access)
+	}
+	return nil
+}
+
+func writeGoUnmarshalFixedQuantUnchecked(b *strings.Builder, access string, f parser.Field, indent string) error {
+	q := f.Quant
+	varName := "_q" + sanitizeVarName(access)
+	if q.Bits == 8 {
+		fmt.Fprintf(b, "%s%s := data[offset]\n", indent, varName)
+		fmt.Fprintf(b, "%soffset += 1\n", indent)
+	} else {
+		fmt.Fprintf(b, "%s%s := binary.LittleEndian.Uint16(data[offset:])\n", indent, varName)
+		fmt.Fprintf(b, "%soffset += 2\n", indent)
+	}
+	expr := dequantizeExpr("go", varName, q, f.Primitive)
+	fmt.Fprintf(b, "%s%s = %s\n", indent, access, goUnmarshalValueExpr(expr, f))
 	return nil
 }
 
@@ -335,12 +490,15 @@ func writeGoUnmarshalPrimitive(b *strings.Builder, access string, f parser.Field
 		fmt.Fprintf(b, "%soffset += 8\n", indent)
 	case parser.KindString:
 		lenVar := "_slen" + sanitizeVarName(access)
+		bytesVar := "_b" + sanitizeVarName(access)
 		fmt.Fprintf(b, "%sif len(data) < offset+2 { return 0, errors.New(\"arpack: buffer too short\") }\n", indent)
 		fmt.Fprintf(b, "%s%s := int(binary.LittleEndian.Uint16(data[offset:]))\n", indent, lenVar)
 		fmt.Fprintf(b, "%soffset += 2\n", indent)
 		fmt.Fprintf(b, "%sif len(data) < offset+%s { return 0, errors.New(\"arpack: buffer too short\") }\n", indent, lenVar)
-		fmt.Fprintf(b, "%s%s = %s\n", indent, access, goUnmarshalValueExpr("string(data[offset : offset+"+lenVar+"])",
-			f))
+		fmt.Fprintf(b, "%s%s := data[offset : offset+%s]\n", indent, bytesVar, lenVar)
+		fmt.Fprintf(b, "%sif !arpackStringEqualBytes(%s, %s) {\n", indent, goMarshalValueExpr(access, f), bytesVar)
+		fmt.Fprintf(b, "%s\t%s = %s\n", indent, access, goUnmarshalValueExpr("string("+bytesVar+")", f))
+		fmt.Fprintf(b, "%s}\n", indent)
 		fmt.Fprintf(b, "%soffset += %s\n", indent, lenVar)
 	}
 	return nil
@@ -410,6 +568,125 @@ func needsMathField(f parser.Field) bool {
 		}
 	}
 	return false
+}
+
+func schemaNeedsStringReuse(messages []parser.Message) bool {
+	for _, msg := range messages {
+		for _, f := range msg.Fields {
+			if fieldNeedsStringReuse(f) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func fieldNeedsStringReuse(f parser.Field) bool {
+	switch f.Kind {
+	case parser.KindPrimitive:
+		return f.Primitive == parser.KindString
+	case parser.KindFixedArray, parser.KindSlice:
+		if f.Elem != nil {
+			return fieldNeedsStringReuse(*f.Elem)
+		}
+	}
+	return false
+}
+
+func goCanInlineNestedUnmarshal(typeName string, messageIndex map[string]parser.Message, visiting map[string]bool) bool {
+	if visiting == nil {
+		visiting = map[string]bool{}
+	}
+	if visiting[typeName] {
+		return false
+	}
+	msg, ok := messageIndex[typeName]
+	if !ok {
+		return false
+	}
+	visiting[typeName] = true
+	defer delete(visiting, typeName)
+	for _, f := range msg.Fields {
+		if !goFieldCanInlineNestedUnmarshal(f, messageIndex, visiting) {
+			return false
+		}
+	}
+	return true
+}
+
+func goFieldCanInlineNestedUnmarshal(f parser.Field, messageIndex map[string]parser.Message, visiting map[string]bool) bool {
+	switch f.Kind {
+	case parser.KindPrimitive:
+		return f.Primitive != parser.KindString && f.Primitive != parser.KindBool
+	case parser.KindNested:
+		return goCanInlineNestedUnmarshal(f.TypeName, messageIndex, visiting)
+	case parser.KindFixedArray:
+		if f.Elem == nil {
+			return false
+		}
+		return goFieldCanInlineNestedUnmarshal(*f.Elem, messageIndex, visiting)
+	case parser.KindSlice:
+		return false
+	}
+	return false
+}
+
+func goCanUncheckedFixedField(f parser.Field, messageIndex map[string]parser.Message, visiting map[string]bool) bool {
+	switch f.Kind {
+	case parser.KindPrimitive:
+		return f.Primitive != parser.KindString
+	case parser.KindNested:
+		return goCanInlineNestedUnmarshal(f.TypeName, messageIndex, visiting)
+	case parser.KindFixedArray:
+		if f.Elem == nil {
+			return false
+		}
+		return goCanUncheckedFixedField(*f.Elem, messageIndex, visiting)
+	case parser.KindSlice:
+		return false
+	}
+	return false
+}
+
+func goFixedWireSize(f parser.Field, messageIndex map[string]parser.Message, visiting map[string]bool) int {
+	switch f.Kind {
+	case parser.KindPrimitive:
+		return f.WireSize()
+	case parser.KindNested:
+		if visiting == nil {
+			visiting = map[string]bool{}
+		}
+		if visiting[f.TypeName] {
+			return -1
+		}
+		msg, ok := messageIndex[f.TypeName]
+		if !ok {
+			return -1
+		}
+		visiting[f.TypeName] = true
+		defer delete(visiting, f.TypeName)
+		total := 0
+		for _, nestedField := range msg.Fields {
+			size := goFixedWireSize(nestedField, messageIndex, visiting)
+			if size < 0 {
+				return -1
+			}
+			total += size
+		}
+		return total
+	case parser.KindFixedArray:
+		if f.Elem == nil {
+			return -1
+		}
+		elemSize := goFixedWireSize(*f.Elem, messageIndex, visiting)
+		if elemSize < 0 {
+			return -1
+		}
+		return f.FixedLen * elemSize
+	case parser.KindSlice:
+		return -1
+	}
+	return -1
 }
 
 func goFieldContainsReferences(f parser.Field, messageIndex map[string]parser.Message, visiting map[string]bool) bool {
