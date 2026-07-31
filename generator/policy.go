@@ -81,7 +81,7 @@ func fieldNeedsQuantRangeGuard(f parser.Field) bool {
 
 // quantizeExpr returns the arithmetic expression string that converts a float64 value
 // to its quantized integer, using float64 arithmetic and truncation toward zero.
-// lang: "go", "cs", "ts", or "lua".
+// lang: "go", "cs", "ts", "lua", or "gml".
 // valueExpr: source-level expression evaluating to the float64 value (e.g. "m.PosX").
 // The caller is responsible for the surrounding buffer write and variable assignment.
 func quantizeExpr(lang, valueExpr string, q *parser.QuantInfo, bits int) string {
@@ -105,6 +105,9 @@ func quantizeExpr(lang, valueExpr string, q *parser.QuantInfo, bits int) string 
 	case "lua":
 		inner = fmt.Sprintf("(%s - (%g)) / (%g - (%g)) * %g", valueExpr, q.Min, q.Max, q.Min, q.MaxUint())
 		return fmt.Sprintf("(math.modf(%s))", inner)
+	case "gml":
+		inner = fmt.Sprintf("(%s - (%g)) / (%g - (%g)) * %g", valueExpr, q.Min, q.Max, q.Min, q.MaxUint())
+		return fmt.Sprintf("(floor(%s))", inner)
 	default:
 		panic("unsupported language: " + lang)
 	}
@@ -112,7 +115,7 @@ func quantizeExpr(lang, valueExpr string, q *parser.QuantInfo, bits int) string 
 
 // dequantizeExpr returns the arithmetic expression string that reconstructs a float64
 // from a quantized wire value, using float64 arithmetic.
-// lang: "go", "cs", "ts", or "lua".
+// lang: "go", "cs", "ts", "lua", or "gml".
 // rawExpr: source-level expression for the raw wire integer (e.g. "data[offset]").
 // For float32 targets, the caller wraps the result in a float32 cast after dequant.
 func dequantizeExpr(lang, rawExpr string, q *parser.QuantInfo, primKind parser.PrimitiveKind) string {
@@ -135,6 +138,8 @@ func dequantizeExpr(lang, rawExpr string, q *parser.QuantInfo, primKind parser.P
 	case "ts":
 		return fmt.Sprintf("(%s / %g) * (%g - (%g)) + (%g)", rawExpr, q.MaxUint(), q.Max, q.Min, q.Min)
 	case "lua":
+		return fmt.Sprintf("(%s / %g) * (%g - (%g)) + (%g)", rawExpr, q.MaxUint(), q.Max, q.Min, q.Min)
+	case "gml":
 		return fmt.Sprintf("(%s / %g) * (%g - (%g)) + (%g)", rawExpr, q.MaxUint(), q.Max, q.Min, q.Min)
 	default:
 		panic("unsupported language: " + lang)

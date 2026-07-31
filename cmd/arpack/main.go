@@ -21,6 +21,7 @@ type genRequest struct {
 	outCS     string
 	outTS     string
 	outLua    string
+	outGML    string
 	namespace string
 }
 
@@ -36,6 +37,7 @@ func main() {
 	outCS := flag.String("out-cs", "", "output directory for generated C# code")
 	outTS := flag.String("out-ts", "", "output directory for generated TypeScript code")
 	outLua := flag.String("out-lua", "", "output directory for generated Lua code")
+	outGML := flag.String("out-gml", "", "output directory for generated GameMaker Language (GML) code")
 	namespace := flag.String("cs-namespace", "Arpack.Messages", "C# namespace")
 	flag.Parse()
 
@@ -43,8 +45,8 @@ func main() {
 		log.Fatal("arpack: -in is required")
 	}
 
-	if *outGo == "" && *outCS == "" && *outTS == "" && *outLua == "" {
-		log.Fatal("arpack: at least one of -out-go, -out-cs, -out-ts, or -out-lua is required")
+	if *outGo == "" && *outCS == "" && *outTS == "" && *outLua == "" && *outGML == "" {
+		log.Fatal("arpack: at least one of -out-go, -out-cs, -out-ts, -out-lua, or -out-gml is required")
 	}
 
 	schema, err := parser.ParseSchemaFile(*in)
@@ -61,6 +63,7 @@ func main() {
 		outCS:     *outCS,
 		outTS:     *outTS,
 		outLua:    *outLua,
+		outGML:    *outGML,
 		namespace: *namespace,
 	})
 	for _, n := range notices {
@@ -144,6 +147,17 @@ func buildOutputs(schema parser.Schema, req genRequest) (files []genFile, notice
 		}
 		// Use snake_case filename for Lua require() compatibility
 		files = append(files, genFile{dir: req.outLua, path: filepath.Join(req.outLua, toSnakeCase(baseName)+"_gen.lua"), data: src})
+	}
+
+	if req.outGML != "" {
+		src, genErr := generator.GenerateGMLSchema(schema)
+		if genErr != nil {
+			return nil, notices, fmt.Errorf("generating GML: %w", genErr)
+		}
+		// GameMaker stores each script as <script_name>/<script_name>.gml, so the
+		// output filename is taken from the output directory name.
+		gmlName := filepath.Base(req.outGML)
+		files = append(files, genFile{dir: req.outGML, path: filepath.Join(req.outGML, gmlName+".gml"), data: src})
 	}
 
 	return files, notices, nil
