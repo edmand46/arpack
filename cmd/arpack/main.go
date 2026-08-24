@@ -15,8 +15,16 @@ import (
 	"github.com/edmand46/arpack/parser"
 )
 
+type multiFlag []string
+
+func (f *multiFlag) String() string { return strings.Join(*f, ",") }
+func (f *multiFlag) Set(v string) error {
+	*f = append(*f, v)
+	return nil
+}
+
 type genRequest struct {
-	in        string
+	name      string
 	outGo     string
 	outCS     string
 	outTS     string
@@ -32,16 +40,18 @@ type genFile struct {
 }
 
 func main() {
-	in := flag.String("in", "", "input Go file with struct definitions")
+	var ins multiFlag
+	name := flag.String("name", "", "base name for generated output files (required with multiple -in)")
 	outGo := flag.String("out-go", "", "output directory for generated Go code")
 	outCS := flag.String("out-cs", "", "output directory for generated C# code")
 	outTS := flag.String("out-ts", "", "output directory for generated TypeScript code")
 	outLua := flag.String("out-lua", "", "output directory for generated Lua code")
 	outGML := flag.String("out-gml", "", "output directory for generated GameMaker Language (GML) code")
 	namespace := flag.String("cs-namespace", "Arpack.Messages", "C# namespace")
+	flag.Var(&ins, "in", "input Go file with struct definitions (repeatable)")
 	flag.Parse()
 
-	if *in == "" {
+	if len(ins) == 0 {
 		log.Fatal("arpack: -in is required")
 	}
 
@@ -49,16 +59,21 @@ func main() {
 		log.Fatal("arpack: at least one of -out-go, -out-cs, -out-ts, -out-lua, or -out-gml is required")
 	}
 
-	schema, err := parser.ParseSchemaFile(*in)
+	baseName, err := pickBaseName(*name, ins)
+	if err != nil {
+		log.Fatalf("arpack: %v", err)
+	}
+
+	schema, err := parser.ParseSchemaFiles(ins)
 	if err != nil {
 		log.Fatalf("arpack: parse error: %v", err)
 	}
 	if len(schema.Messages) == 0 && len(schema.Enums) == 0 {
-		log.Fatalf("arpack: no structs or enums found in %s", *in)
+		log.Fatalf("arpack: no structs or enums found in %s", strings.Join(ins, ", "))
 	}
 
 	files, notices, err := buildOutputs(schema, genRequest{
-		in:        *in,
+		name:      baseName,
 		outGo:     *outGo,
 		outCS:     *outCS,
 		outTS:     *outTS,
@@ -95,7 +110,7 @@ func buildOutputs(schema parser.Schema, req genRequest) (files []genFile, notice
 		schemaPkg = "main"
 	}
 
-	baseName := strings.TrimSuffix(filepath.Base(req.in), ".go")
+	baseName := req.name
 
 	if req.outGo != "" {
 		if len(msgs) == 0 {
@@ -316,6 +331,17 @@ func writeTempOutput(f genFile) (string, error) {
 
 	ok = true
 	return tempPath, nil
+}
+
+func pickBaseName(nameFlag string, inputs []string) (string, error) {
+	switch {
+	case nameFlag != "":
+		return nameFlag, nil
+	case len(inputs) == 1:
+		return strings.TrimSuffix(filepath.Base(inputs[0]), ".go"), nil
+	default:
+		return "", fmt.Errorf("-name is required when multiple -in files are given")
+	}
 }
 
 func toTitle(s string) string {
