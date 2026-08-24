@@ -32,7 +32,8 @@ arpack \
 
 | Flag | Purpose |
 | --- | --- |
-| `-in` | Input Go schema file |
+| `-in` | Input Go schema file, repeatable |
+| `-name` | Base name for generated output files; required when multiple `-in` are given |
 | `-out-go` | Generated Go methods, co-located with the schema package |
 | `-out-cs` | Generated C# files |
 | `-out-ts` | Generated TypeScript files |
@@ -52,7 +53,19 @@ Output names:
 
 ## Schema
 
-Schemas are single Go files. Message structs, nested message structs, enum types, and enum constants must be defined in that file.
+Schemas are Go files. Message structs, nested message structs, enum types, and enum constants must be defined in the schema files.
+
+Multiple `-in` files are merged into one output file per target. Files sharing a package name are type-checked together (cross-file references work within a package); different packages are parsed independently and merged. Type names must be unique across all inputs — e.g. system messages from a framework and game messages from your project:
+
+```bash
+arpack \
+  -in vendor/framework/messages.go \
+  -in game/messages.go \
+  -name messages \
+  -out-cs client/Messages
+```
+
+Cross-package type references (`framework.Vec3` in a game struct) are not supported; shared structs must live in one of the inputs.
 
 ```go
 package messages
