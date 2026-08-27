@@ -148,16 +148,17 @@ func TestBuildOutputs_KeywordDirFallsBackToSchemaPackage(t *testing.T) {
 }
 
 func TestPickBaseName(t *testing.T) {
-	base, err := pickBaseName("", []string{"/x/y/net_messages.go"})
-	if err != nil || base != "net_messages" {
-		t.Fatalf("single input: got %q, %v", base, err)
+	base := pickBaseName("", []string{"/x/y/net_messages.go"})
+	if base != "net_messages" {
+		t.Fatalf("single input: got %q", base)
 	}
-	base, err = pickBaseName("custom", []string{"/x/y/a.go", "/x/y/b.go"})
-	if err != nil || base != "custom" {
-		t.Fatalf("name flag: got %q, %v", base, err)
+	base = pickBaseName("custom", []string{"/x/y/a.go", "/x/y/b.go"})
+	if base != "custom" {
+		t.Fatalf("name flag: got %q", base)
 	}
-	if _, err = pickBaseName("", []string{"/x/y/a.go", "/x/y/b.go"}); err == nil {
-		t.Fatal("multiple inputs without -name: expected error, got nil")
+	base = pickBaseName("", []string{"/x/y/a.go", "/x/y/b.go"})
+	if base != "a" {
+		t.Fatalf("multiple inputs without -name: got %q, want first input base", base)
 	}
 }
 

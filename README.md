@@ -33,7 +33,7 @@ arpack \
 | Flag | Purpose |
 | --- | --- |
 | `-in` | Input Go schema file, repeatable |
-| `-name` | Base name for generated output files; required when multiple `-in` are given |
+| `-name` | Base name for generated output files; defaults to the first `-in` file's name |
 | `-out-go` | Generated Go methods, co-located with the schema package |
 | `-out-cs` | Generated C# files |
 | `-out-ts` | Generated TypeScript files |

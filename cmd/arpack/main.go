@@ -41,7 +41,7 @@ type genFile struct {
 
 func main() {
 	var ins multiFlag
-	name := flag.String("name", "", "base name for generated output files (required with multiple -in)")
+	name := flag.String("name", "", "base name for generated output files (defaults to the first -in file's name)")
 	outGo := flag.String("out-go", "", "output directory for generated Go code")
 	outCS := flag.String("out-cs", "", "output directory for generated C# code")
 	outTS := flag.String("out-ts", "", "output directory for generated TypeScript code")
@@ -59,10 +59,7 @@ func main() {
 		log.Fatal("arpack: at least one of -out-go, -out-cs, -out-ts, -out-lua, or -out-gml is required")
 	}
 
-	baseName, err := pickBaseName(*name, ins)
-	if err != nil {
-		log.Fatalf("arpack: %v", err)
-	}
+	baseName := pickBaseName(*name, ins)
 
 	schema, err := parser.ParseSchemaFiles(ins)
 	if err != nil {
@@ -333,15 +330,11 @@ func writeTempOutput(f genFile) (string, error) {
 	return tempPath, nil
 }
 
-func pickBaseName(nameFlag string, inputs []string) (string, error) {
-	switch {
-	case nameFlag != "":
-		return nameFlag, nil
-	case len(inputs) == 1:
-		return strings.TrimSuffix(filepath.Base(inputs[0]), ".go"), nil
-	default:
-		return "", fmt.Errorf("-name is required when multiple -in files are given")
+func pickBaseName(nameFlag string, inputs []string) string {
+	if nameFlag != "" {
+		return nameFlag
 	}
+	return strings.TrimSuffix(filepath.Base(inputs[0]), ".go")
 }
 
 func toTitle(s string) string {
