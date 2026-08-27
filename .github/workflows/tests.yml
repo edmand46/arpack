@@ -37,6 +37,11 @@ jobs:
         sudo apt-get update -qq
         sudo apt-get install -y -qq luajit
 
+    - name: Set up .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '9.0.x'
+
     - name: Run full Go test suite
       run: make test
 
