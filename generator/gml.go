@@ -61,7 +61,7 @@ func GenerateGMLSchema(schema parser.Schema) ([]byte, error) {
 
 	// Generate deserializers
 	for _, msg := range messages {
-		if err := writeGMLDeserializer(&b, msg, enumNames); err != nil {
+		if err := writeGMLDeserializer(&b, msg); err != nil {
 			return nil, fmt.Errorf("message %s: %w", msg.Name, err)
 		}
 		b.WriteString("\n")
@@ -136,7 +136,7 @@ func writeGMLConstructor(b *strings.Builder, msg parser.Message, enumNames map[s
 	b.WriteString("        }\n")
 	for i, seg := range segs {
 		if seg.single != nil {
-			if err := writeGMLSerializeField(b, "self", *seg.single, "        ", enumNames); err != nil {
+			if err := writeGMLSerializeField(b, "self", *seg.single, "        "); err != nil {
 				return err
 			}
 		} else {
@@ -154,7 +154,7 @@ func writeGMLConstructor(b *strings.Builder, msg parser.Message, enumNames map[s
 	return nil
 }
 
-func writeGMLDeserializer(b *strings.Builder, msg parser.Message, enumNames map[string]struct{}) error {
+func writeGMLDeserializer(b *strings.Builder, msg parser.Message) error {
 	segs := segmentFields(msg.Fields)
 
 	fmt.Fprintf(b, "%s.deserialize = function(_buf)\n", msg.Name)
@@ -163,7 +163,7 @@ func writeGMLDeserializer(b *strings.Builder, msg parser.Message, enumNames map[
 	fmt.Fprintf(b, "    var _msg = new %s();\n", msg.Name)
 	for i, seg := range segs {
 		if seg.single != nil {
-			if err := writeGMLDeserializeField(b, "_msg", *seg.single, "    ", enumNames); err != nil {
+			if err := writeGMLDeserializeField(b, "_msg", *seg.single, "    "); err != nil {
 				return err
 			}
 		} else {
@@ -223,11 +223,11 @@ func writeGMLBoolGroupDeserialize(b *strings.Builder, recv string, bools []parse
 	}
 }
 
-func writeGMLSerializeField(b *strings.Builder, recv string, f parser.Field, indent string, enumNames map[string]struct{}) error {
+func writeGMLSerializeField(b *strings.Builder, recv string, f parser.Field, indent string) error {
 	access := gmlFieldAccess(recv, f.Name)
 	switch f.Kind {
 	case parser.KindPrimitive:
-		return writeGMLSerializePrimitive(b, access, f, indent, enumNames)
+		return writeGMLSerializePrimitive(b, access, f, indent)
 	case parser.KindNested:
 		fmt.Fprintf(b, "%s%s.serialize(_buf);\n", indent, access)
 	case parser.KindFixedArray:
@@ -246,7 +246,7 @@ func writeGMLSerializeField(b *strings.Builder, recv string, f parser.Field, ind
 			Elem:      f.Elem.Elem,
 			FixedLen:  f.Elem.FixedLen,
 		}
-		if err := writeGMLSerializeField(b, recv, elemField, indent+"    ", enumNames); err != nil {
+		if err := writeGMLSerializeField(b, recv, elemField, indent+"    "); err != nil {
 			return err
 		}
 		fmt.Fprintf(b, "%s}\n", indent)
@@ -268,7 +268,7 @@ func writeGMLSerializeField(b *strings.Builder, recv string, f parser.Field, ind
 			Elem:      f.Elem.Elem,
 			FixedLen:  f.Elem.FixedLen,
 		}
-		if err := writeGMLSerializeField(b, recv, elemField, indent+"    ", enumNames); err != nil {
+		if err := writeGMLSerializeField(b, recv, elemField, indent+"    "); err != nil {
 			return err
 		}
 		fmt.Fprintf(b, "%s}\n", indent)
@@ -276,7 +276,7 @@ func writeGMLSerializeField(b *strings.Builder, recv string, f parser.Field, ind
 	return nil
 }
 
-func writeGMLSerializePrimitive(b *strings.Builder, access string, f parser.Field, indent string, enumNames map[string]struct{}) error {
+func writeGMLSerializePrimitive(b *strings.Builder, access string, f parser.Field, indent string) error {
 	if f.Quant != nil {
 		return writeGMLSerializeQuant(b, access, f, indent)
 	}
@@ -329,11 +329,11 @@ func writeGMLSerializeQuant(b *strings.Builder, access string, f parser.Field, i
 	return nil
 }
 
-func writeGMLDeserializeField(b *strings.Builder, recv string, f parser.Field, indent string, enumNames map[string]struct{}) error {
+func writeGMLDeserializeField(b *strings.Builder, recv string, f parser.Field, indent string) error {
 	access := gmlFieldAccess(recv, f.Name)
 	switch f.Kind {
 	case parser.KindPrimitive:
-		return writeGMLDeserializePrimitive(b, access, f, indent, enumNames)
+		return writeGMLDeserializePrimitive(b, access, f, indent)
 	case parser.KindNested:
 		fmt.Fprintf(b, "%s%s = %s.deserialize(_buf)[0];\n", indent, access, f.TypeName)
 	case parser.KindFixedArray:
@@ -351,7 +351,7 @@ func writeGMLDeserializeField(b *strings.Builder, recv string, f parser.Field, i
 			Elem:      f.Elem.Elem,
 			FixedLen:  f.Elem.FixedLen,
 		}
-		if err := writeGMLDeserializeField(b, recv, elemField, indent+"    ", enumNames); err != nil {
+		if err := writeGMLDeserializeField(b, recv, elemField, indent+"    "); err != nil {
 			return err
 		}
 		fmt.Fprintf(b, "%s}\n", indent)
@@ -373,7 +373,7 @@ func writeGMLDeserializeField(b *strings.Builder, recv string, f parser.Field, i
 			Elem:      f.Elem.Elem,
 			FixedLen:  f.Elem.FixedLen,
 		}
-		if err := writeGMLDeserializeField(b, recv, elemField, indent+"    ", enumNames); err != nil {
+		if err := writeGMLDeserializeField(b, recv, elemField, indent+"    "); err != nil {
 			return err
 		}
 		fmt.Fprintf(b, "%s}\n", indent)
@@ -381,7 +381,7 @@ func writeGMLDeserializeField(b *strings.Builder, recv string, f parser.Field, i
 	return nil
 }
 
-func writeGMLDeserializePrimitive(b *strings.Builder, access string, f parser.Field, indent string, enumNames map[string]struct{}) error {
+func writeGMLDeserializePrimitive(b *strings.Builder, access string, f parser.Field, indent string) error {
 	if f.Quant != nil {
 		return writeGMLDeserializeQuant(b, access, f, indent)
 	}

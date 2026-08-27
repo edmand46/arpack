@@ -20,14 +20,14 @@ func writeSchema(t *testing.T, src string) string {
 	return path
 }
 
-func parseSchema(t *testing.T, src string) (parser.Schema, string) {
+func parseSchema(t *testing.T, src string) parser.Schema {
 	t.Helper()
 	path := writeSchema(t, src)
 	schema, err := parser.ParseSchemaFile(path)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	return schema, path
+	return schema
 }
 
 const structSchema = `package messages
@@ -55,7 +55,7 @@ type Big struct {
 `
 
 func TestBuildOutputs_AllTargets(t *testing.T) {
-	schema, _ := parseSchema(t, structSchema)
+	schema := parseSchema(t, structSchema)
 	out := t.TempDir()
 	files, notices, err := buildOutputs(schema, genRequest{
 		name:      "messages",
@@ -85,7 +85,7 @@ func TestBuildOutputs_AllTargets(t *testing.T) {
 func TestBuildOutputs_FailingTargetProducesNoFiles(t *testing.T) {
 	// Lua rejects uint64; the Go/C#/TS targets would succeed, but a failing
 	// target must abort the whole run with zero files (all-or-nothing).
-	schema, _ := parseSchema(t, luaUnsupportedSchema)
+	schema := parseSchema(t, luaUnsupportedSchema)
 	out := t.TempDir()
 	files, _, err := buildOutputs(schema, genRequest{
 		name:      "messages",
@@ -107,7 +107,7 @@ func TestBuildOutputs_FailingTargetProducesNoFiles(t *testing.T) {
 }
 
 func TestBuildOutputs_EnumOnlySkipsGo(t *testing.T) {
-	schema, _ := parseSchema(t, enumOnlySchema)
+	schema := parseSchema(t, enumOnlySchema)
 	out := t.TempDir()
 	files, notices, err := buildOutputs(schema, genRequest{
 		name:      "messages",
@@ -130,7 +130,7 @@ func TestBuildOutputs_EnumOnlySkipsGo(t *testing.T) {
 }
 
 func TestBuildOutputs_KeywordDirFallsBackToSchemaPackage(t *testing.T) {
-	schema, _ := parseSchema(t, structSchema)
+	schema := parseSchema(t, structSchema)
 	out := t.TempDir()
 	files, notices, err := buildOutputs(schema, genRequest{
 		name:  "messages",
