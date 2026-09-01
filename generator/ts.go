@@ -7,12 +7,10 @@ import (
 	"github.com/edmand46/arpack/parser"
 )
 
-// GenerateTypeScript generates TypeScript code for the given messages
 func GenerateTypeScript(messages []parser.Message) ([]byte, error) {
 	return GenerateTypeScriptSchema(parser.Schema{Messages: messages})
 }
 
-// GenerateTypeScriptSchema generates TypeScript code from a schema
 func GenerateTypeScriptSchema(schema parser.Schema) ([]byte, error) {
 	messages := schema.Messages
 	var b strings.Builder
@@ -72,13 +70,11 @@ func GenerateTypeScriptSchema(schema parser.Schema) ([]byte, error) {
 		enumNames[enum.Name] = struct{}{}
 	}
 
-	// Generate enums
 	for _, enum := range schema.Enums {
 		writeTSEnum(&b, enum)
 		b.WriteString("\n")
 	}
 
-	// Generate messages
 	for i, msg := range messages {
 		if err := writeTSMessage(&b, msg, enumNames); err != nil {
 			return nil, fmt.Errorf("message %s: %w", msg.Name, err)
@@ -108,14 +104,12 @@ func writeTSMessage(b *strings.Builder, msg parser.Message, enumNames map[string
 
 	fmt.Fprintf(b, "export class %s {\n", msg.Name)
 
-	// Field declarations with defaults
 	for _, f := range msg.Fields {
 		defaultValue := tsDefaultValue(f, enumNames)
 		fmt.Fprintf(b, "  %s: %s = %s;\n", toCamelCase(f.Name), tsTypeName(f, enumNames), defaultValue)
 	}
 	b.WriteString("\n")
 
-	// Serialize method
 	b.WriteString("  serialize(buffer: Uint8Array): number;\n")
 	b.WriteString("  serialize(view: DataView, offset: number): number;\n")
 	b.WriteString("  serialize(target: DataView | Uint8Array, offset?: number): number {\n")
@@ -134,7 +128,6 @@ func writeTSMessage(b *strings.Builder, msg parser.Message, enumNames map[string
 	b.WriteString("    return pos - start;\n")
 	b.WriteString("  }\n\n")
 
-	// Deserialize method
 	fmt.Fprintf(b, "  static deserialize(data: Uint8Array): [%s, number];\n", msg.Name)
 	fmt.Fprintf(b, "  static deserialize(view: DataView, offset: number): [%s, number];\n", msg.Name)
 	fmt.Fprintf(b, "  static deserialize(source: DataView | Uint8Array, offset?: number): [%s, number] {\n", msg.Name)
@@ -190,16 +183,8 @@ func writeTSSerializeField(b *strings.Builder, recv string, f parser.Field, inde
 		fmt.Fprintf(b, "%sarpackEnsureFixedArray(%s, %d, %q);\n", indent, access, f.FixedLen, "fixed array for "+f.Name)
 		fmt.Fprintf(b, "%sfor (let %s = 0; %s < %d; %s++) {\n",
 			indent, iVar, iVar, f.FixedLen, iVar)
-		elemField := parser.Field{
-			Name:      f.Name + "[" + iVar + "]",
-			Kind:      f.Elem.Kind,
-			Primitive: f.Elem.Primitive,
-			NamedType: f.Elem.NamedType,
-			Quant:     f.Elem.Quant,
-			TypeName:  f.Elem.TypeName,
-			Elem:      f.Elem.Elem,
-			FixedLen:  f.Elem.FixedLen,
-		}
+		elemField := *f.Elem
+		elemField.Name = f.Name + "[" + iVar + "]"
 		if err := writeTSSerializeField(b, recv, elemField, indent+"  ", enumNames); err != nil {
 			return err
 		}
@@ -211,86 +196,13 @@ func writeTSSerializeField(b *strings.Builder, recv string, f parser.Field, inde
 		fmt.Fprintf(b, "%sview.setUint16(pos, %s, true);\n", indent, lenVar)
 		fmt.Fprintf(b, "%spos += 2;\n", indent)
 		iVar := "_i" + f.Name
-		fmt.Fprintf(b, "%sfor (const %s of %s) {\n", indent, iVar, access)
-		elemField := parser.Field{
-			Name:      iVar,
-			Kind:      f.Elem.Kind,
-			Primitive: f.Elem.Primitive,
-			NamedType: f.Elem.NamedType,
-			Quant:     f.Elem.Quant,
-			TypeName:  f.Elem.TypeName,
-			Elem:      f.Elem.Elem,
-			FixedLen:  f.Elem.FixedLen,
-		}
-		if err := writeTSSerializeFieldElement(b, iVar, elemField, indent+"  ", enumNames); err != nil {
+		fmt.Fprintf(b, "%sfor (let %s = 0; %s < %s.length; %s++) {\n", indent, iVar, iVar, access, iVar)
+		elemField := *f.Elem
+		elemField.Name = f.Name + "[" + iVar + "]"
+		if err := writeTSSerializeField(b, recv, elemField, indent+"  ", enumNames); err != nil {
 			return err
 		}
 		fmt.Fprintf(b, "%s}\n", indent)
-	}
-	return nil
-}
-
-func writeTSSerializeFieldElement(b *strings.Builder, access string, f parser.Field, indent string, enumNames map[string]struct{}) error {
-	switch f.Kind {
-	case parser.KindPrimitive:
-		return writeTSSerializePrimitiveElement(b, access, f, indent, enumNames)
-	case parser.KindNested:
-		fmt.Fprintf(b, "%spos += %s.serialize(view, pos);\n", indent, access)
-	}
-	return nil
-}
-
-func writeTSSerializePrimitiveElement(b *strings.Builder, access string, f parser.Field, indent string, enumNames map[string]struct{}) error {
-	if f.Quant != nil {
-		return writeTSSerializeQuantElement(b, access, f, indent)
-	}
-
-	valueExpr := tsSerializeValueExpr(access, f, enumNames)
-	switch f.Primitive {
-	case parser.KindFloat32:
-		fmt.Fprintf(b, "%sview.setFloat32(pos, %s, true);\n", indent, valueExpr)
-		fmt.Fprintf(b, "%spos += 4;\n", indent)
-	case parser.KindFloat64:
-		fmt.Fprintf(b, "%sview.setFloat64(pos, %s, true);\n", indent, valueExpr)
-		fmt.Fprintf(b, "%spos += 8;\n", indent)
-	case parser.KindInt8:
-		fmt.Fprintf(b, "%sview.setInt8(pos, %s);\n", indent, valueExpr)
-		fmt.Fprintf(b, "%spos += 1;\n", indent)
-	case parser.KindUint8:
-		fmt.Fprintf(b, "%sview.setUint8(pos, %s);\n", indent, valueExpr)
-		fmt.Fprintf(b, "%spos += 1;\n", indent)
-	case parser.KindBool:
-		fmt.Fprintf(b, "%sview.setUint8(pos, %s ? 1 : 0);\n", indent, valueExpr)
-		fmt.Fprintf(b, "%spos += 1;\n", indent)
-	case parser.KindInt16:
-		fmt.Fprintf(b, "%sview.setInt16(pos, %s, true);\n", indent, valueExpr)
-		fmt.Fprintf(b, "%spos += 2;\n", indent)
-	case parser.KindUint16:
-		fmt.Fprintf(b, "%sview.setUint16(pos, %s, true);\n", indent, valueExpr)
-		fmt.Fprintf(b, "%spos += 2;\n", indent)
-	case parser.KindInt32:
-		fmt.Fprintf(b, "%sview.setInt32(pos, %s, true);\n", indent, valueExpr)
-		fmt.Fprintf(b, "%spos += 4;\n", indent)
-	case parser.KindUint32:
-		fmt.Fprintf(b, "%sview.setUint32(pos, %s, true);\n", indent, valueExpr)
-		fmt.Fprintf(b, "%spos += 4;\n", indent)
-	case parser.KindInt64:
-		fmt.Fprintf(b, "%sview.setBigInt64(pos, %s, true);\n", indent, valueExpr)
-		fmt.Fprintf(b, "%spos += 8;\n", indent)
-	case parser.KindUint64:
-		fmt.Fprintf(b, "%sview.setBigUint64(pos, %s, true);\n", indent, valueExpr)
-		fmt.Fprintf(b, "%spos += 8;\n", indent)
-	case parser.KindString:
-		lenVar := "_slen" + sanitizeVarName(access)
-		guardVar := "_slenChecked" + sanitizeVarName(access)
-		fmt.Fprintf(b, "%sconst %s = arpackTextEncoder.encode(%s);\n", indent, lenVar, valueExpr)
-		fmt.Fprintf(b, "%sconst %s = arpackEnsureUint16Length(%s.length, %q);\n",
-			indent, guardVar, lenVar, lengthContext(f))
-		fmt.Fprintf(b, "%sarpackEnsureWritable(view, pos, 2 + %s.length, %q);\n", indent, lenVar, "string data for "+f.Name)
-		fmt.Fprintf(b, "%sview.setUint16(pos, %s, true);\n", indent, guardVar)
-		fmt.Fprintf(b, "%spos += 2;\n", indent)
-		fmt.Fprintf(b, "%snew Uint8Array(view.buffer, view.byteOffset+pos, %s.length).set(%s);\n", indent, lenVar, lenVar)
-		fmt.Fprintf(b, "%spos += %s.length;\n", indent, lenVar)
 	}
 	return nil
 }
@@ -366,22 +278,6 @@ func writeTSSerializeQuant(b *strings.Builder, access string, f parser.Field, in
 	return nil
 }
 
-func writeTSSerializeQuantElement(b *strings.Builder, access string, f parser.Field, indent string) error {
-	q := f.Quant
-	varName := "_q" + sanitizeVarName(access)
-	fmt.Fprintf(b, "%sarpackEnsureQuantizedRange(%s, %g, %g, %q);\n",
-		indent, access, q.Min, q.Max, quantContext(f))
-	fmt.Fprintf(b, "%sconst %s = %s;\n", indent, varName, quantizeExpr("ts", access, q, q.Bits))
-	if q.Bits == 8 {
-		fmt.Fprintf(b, "%sview.setUint8(pos, %s);\n", indent, varName)
-		fmt.Fprintf(b, "%spos += 1;\n", indent)
-	} else {
-		fmt.Fprintf(b, "%sview.setUint16(pos, %s, true);\n", indent, varName)
-		fmt.Fprintf(b, "%spos += 2;\n", indent)
-	}
-	return nil
-}
-
 func writeTSDeserializeField(b *strings.Builder, recv string, f parser.Field, indent string, enumNames map[string]struct{}) error {
 	access := recv + "." + toCamelCase(f.Name)
 	switch f.Kind {
@@ -397,16 +293,8 @@ func writeTSDeserializeField(b *strings.Builder, recv string, f parser.Field, in
 		fmt.Fprintf(b, "%s%s = new Array(%d);\n", indent, access, f.FixedLen)
 		fmt.Fprintf(b, "%sfor (let %s = 0; %s < %d; %s++) {\n",
 			indent, iVar, iVar, f.FixedLen, iVar)
-		elemField := parser.Field{
-			Name:      f.Name + "[" + iVar + "]",
-			Kind:      f.Elem.Kind,
-			Primitive: f.Elem.Primitive,
-			NamedType: f.Elem.NamedType,
-			Quant:     f.Elem.Quant,
-			TypeName:  f.Elem.TypeName,
-			Elem:      f.Elem.Elem,
-			FixedLen:  f.Elem.FixedLen,
-		}
+		elemField := *f.Elem
+		elemField.Name = f.Name + "[" + iVar + "]"
 		if err := writeTSDeserializeField(b, recv, elemField, indent+"  ", enumNames); err != nil {
 			return err
 		}
@@ -419,107 +307,12 @@ func writeTSDeserializeField(b *strings.Builder, recv string, f parser.Field, in
 		fmt.Fprintf(b, "%s%s = new Array(%s);\n", indent, access, lenVar)
 		iVar := "_i" + f.Name
 		fmt.Fprintf(b, "%sfor (let %s = 0; %s < %s; %s++) {\n", indent, iVar, iVar, lenVar, iVar)
-		elemField := parser.Field{
-			Name:      f.Name + "[" + iVar + "]",
-			Kind:      f.Elem.Kind,
-			Primitive: f.Elem.Primitive,
-			NamedType: f.Elem.NamedType,
-			Quant:     f.Elem.Quant,
-			TypeName:  f.Elem.TypeName,
-			Elem:      f.Elem.Elem,
-			FixedLen:  f.Elem.FixedLen,
-		}
-		if err := writeTSDeserializeFieldElement(b, recv, elemField, indent+"  ", enumNames); err != nil {
+		elemField := *f.Elem
+		elemField.Name = f.Name + "[" + iVar + "]"
+		if err := writeTSDeserializeField(b, recv, elemField, indent+"  ", enumNames); err != nil {
 			return err
 		}
 		fmt.Fprintf(b, "%s}\n", indent)
-	}
-	return nil
-}
-
-func writeTSDeserializeFieldElement(b *strings.Builder, recv string, f parser.Field, indent string, enumNames map[string]struct{}) error {
-	access := recv + "." + toCamelCase(f.Name)
-	switch f.Kind {
-	case parser.KindPrimitive:
-		return writeTSDeserializePrimitiveElement(b, access, f, indent, enumNames)
-	case parser.KindNested:
-		fmt.Fprintf(b, "%sconst [_elem, _nElem] = %s.deserialize(view, pos);\n", indent, f.TypeName)
-		fmt.Fprintf(b, "%s%s = _elem;\n", indent, access)
-		fmt.Fprintf(b, "%spos += _nElem;\n", indent)
-	}
-	return nil
-}
-
-func writeTSDeserializePrimitiveElement(b *strings.Builder, access string, f parser.Field, indent string, enumNames map[string]struct{}) error {
-	if f.Quant != nil {
-		return writeTSDeserializeQuantElement(b, access, f, indent)
-	}
-
-	switch f.Primitive {
-	case parser.KindFloat32:
-		fmt.Fprintf(b, "%sarpackEnsureReadable(view, pos, 4, %q);\n", indent, "float32")
-		expr := "view.getFloat32(pos, true)"
-		fmt.Fprintf(b, "%s%s = %s;\n", indent, access, tsDeserializeValueExpr(expr, f, enumNames))
-		fmt.Fprintf(b, "%spos += 4;\n", indent)
-	case parser.KindFloat64:
-		fmt.Fprintf(b, "%sarpackEnsureReadable(view, pos, 8, %q);\n", indent, "float64")
-		expr := "view.getFloat64(pos, true)"
-		fmt.Fprintf(b, "%s%s = %s;\n", indent, access, tsDeserializeValueExpr(expr, f, enumNames))
-		fmt.Fprintf(b, "%spos += 8;\n", indent)
-	case parser.KindInt8:
-		fmt.Fprintf(b, "%sarpackEnsureReadable(view, pos, 1, %q);\n", indent, "int8")
-		expr := "view.getInt8(pos)"
-		fmt.Fprintf(b, "%s%s = %s;\n", indent, access, tsDeserializeValueExpr(expr, f, enumNames))
-		fmt.Fprintf(b, "%spos += 1;\n", indent)
-	case parser.KindUint8:
-		fmt.Fprintf(b, "%sarpackEnsureReadable(view, pos, 1, %q);\n", indent, "uint8")
-		expr := "view.getUint8(pos)"
-		fmt.Fprintf(b, "%s%s = %s;\n", indent, access, tsDeserializeValueExpr(expr, f, enumNames))
-		fmt.Fprintf(b, "%spos += 1;\n", indent)
-	case parser.KindBool:
-		fmt.Fprintf(b, "%sarpackEnsureReadable(view, pos, 1, %q);\n", indent, "bool")
-		expr := "view.getUint8(pos) !== 0"
-		fmt.Fprintf(b, "%s%s = %s;\n", indent, access, tsDeserializeValueExpr(expr, f, enumNames))
-		fmt.Fprintf(b, "%spos += 1;\n", indent)
-	case parser.KindInt16:
-		fmt.Fprintf(b, "%sarpackEnsureReadable(view, pos, 2, %q);\n", indent, "int16")
-		expr := "view.getInt16(pos, true)"
-		fmt.Fprintf(b, "%s%s = %s;\n", indent, access, tsDeserializeValueExpr(expr, f, enumNames))
-		fmt.Fprintf(b, "%spos += 2;\n", indent)
-	case parser.KindUint16:
-		fmt.Fprintf(b, "%sarpackEnsureReadable(view, pos, 2, %q);\n", indent, "uint16")
-		expr := "view.getUint16(pos, true)"
-		fmt.Fprintf(b, "%s%s = %s;\n", indent, access, tsDeserializeValueExpr(expr, f, enumNames))
-		fmt.Fprintf(b, "%spos += 2;\n", indent)
-	case parser.KindInt32:
-		fmt.Fprintf(b, "%sarpackEnsureReadable(view, pos, 4, %q);\n", indent, "int32")
-		expr := "view.getInt32(pos, true)"
-		fmt.Fprintf(b, "%s%s = %s;\n", indent, access, tsDeserializeValueExpr(expr, f, enumNames))
-		fmt.Fprintf(b, "%spos += 4;\n", indent)
-	case parser.KindUint32:
-		fmt.Fprintf(b, "%sarpackEnsureReadable(view, pos, 4, %q);\n", indent, "uint32")
-		expr := "view.getUint32(pos, true)"
-		fmt.Fprintf(b, "%s%s = %s;\n", indent, access, tsDeserializeValueExpr(expr, f, enumNames))
-		fmt.Fprintf(b, "%spos += 4;\n", indent)
-	case parser.KindInt64:
-		fmt.Fprintf(b, "%sarpackEnsureReadable(view, pos, 8, %q);\n", indent, "int64")
-		expr := "view.getBigInt64(pos, true)"
-		fmt.Fprintf(b, "%s%s = %s;\n", indent, access, tsDeserializeValueExpr(expr, f, enumNames))
-		fmt.Fprintf(b, "%spos += 8;\n", indent)
-	case parser.KindUint64:
-		fmt.Fprintf(b, "%sarpackEnsureReadable(view, pos, 8, %q);\n", indent, "uint64")
-		expr := "view.getBigUint64(pos, true)"
-		fmt.Fprintf(b, "%s%s = %s;\n", indent, access, tsDeserializeValueExpr(expr, f, enumNames))
-		fmt.Fprintf(b, "%spos += 8;\n", indent)
-	case parser.KindString:
-		lenVar := "_slen" + sanitizeVarName(access)
-		fmt.Fprintf(b, "%sarpackEnsureReadable(view, pos, 2, %q);\n", indent, "string length for "+f.Name)
-		fmt.Fprintf(b, "%sconst %s = view.getUint16(pos, true);\n", indent, lenVar)
-		fmt.Fprintf(b, "%spos += 2;\n", indent)
-		fmt.Fprintf(b, "%sarpackEnsureReadable(view, pos, %s, %q);\n", indent, lenVar, "string data for "+f.Name)
-		expr := fmt.Sprintf("arpackTextDecoder.decode(new Uint8Array(view.buffer, view.byteOffset+pos, %s))", lenVar)
-		fmt.Fprintf(b, "%s%s = %s;\n", indent, access, tsDeserializeValueExpr(expr, f, enumNames))
-		fmt.Fprintf(b, "%spos += %s;\n", indent, lenVar)
 	}
 	return nil
 }
@@ -599,23 +392,6 @@ func writeTSDeserializePrimitive(b *strings.Builder, access string, f parser.Fie
 }
 
 func writeTSDeserializeQuant(b *strings.Builder, access string, f parser.Field, indent string) error {
-	q := f.Quant
-	varName := "_q" + sanitizeVarName(access)
-	if q.Bits == 8 {
-		fmt.Fprintf(b, "%sarpackEnsureReadable(view, pos, 1, %q);\n", indent, "quantized value for "+f.Name)
-		fmt.Fprintf(b, "%sconst %s = view.getUint8(pos);\n", indent, varName)
-		fmt.Fprintf(b, "%spos += 1;\n", indent)
-	} else {
-		fmt.Fprintf(b, "%sarpackEnsureReadable(view, pos, 2, %q);\n", indent, "quantized value for "+f.Name)
-		fmt.Fprintf(b, "%sconst %s = view.getUint16(pos, true);\n", indent, varName)
-		fmt.Fprintf(b, "%spos += 2;\n", indent)
-	}
-	expr := dequantizeExpr("ts", varName, q, f.Primitive)
-	fmt.Fprintf(b, "%s%s = %s;\n", indent, access, tsDeserializeValueExpr(expr, f, nil))
-	return nil
-}
-
-func writeTSDeserializeQuantElement(b *strings.Builder, access string, f parser.Field, indent string) error {
 	q := f.Quant
 	varName := "_q" + sanitizeVarName(access)
 	if q.Bits == 8 {
@@ -727,12 +503,11 @@ func tsIsEnumType(f parser.Field, enumNames map[string]struct{}) bool {
 	return ok
 }
 
-// toCamelCase converts PascalCase to camelCase (e.g., EntityID -> entityID)
 func toCamelCase(s string) string {
 	if s == "" {
 		return ""
 	}
-	// First character to lowercase
+
 	result := strings.ToLower(s[:1]) + s[1:]
 	return result
 }

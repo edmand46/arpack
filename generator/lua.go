@@ -40,7 +40,7 @@ func GenerateLuaSchema(schema parser.Schema, moduleName string) ([]byte, error) 
 	}
 
 	for _, msg := range messages {
-		if err := writeLuaSerializer(&b, msg, enumNames); err != nil {
+		if err := writeLuaSerializer(&b, msg); err != nil {
 			return nil, fmt.Errorf("message %s: %w", msg.Name, err)
 		}
 		b.WriteString("\n")
@@ -48,7 +48,7 @@ func GenerateLuaSchema(schema parser.Schema, moduleName string) ([]byte, error) 
 
 	needsLengthGuards := schemaNeedsLengthGuards(messages)
 	for _, msg := range messages {
-		if err := writeLuaDeserializer(&b, msg, enumNames, needsLengthGuards); err != nil {
+		if err := writeLuaDeserializer(&b, msg, needsLengthGuards); err != nil {
 			return nil, fmt.Errorf("message %s: %w", msg.Name, err)
 		}
 		b.WriteString("\n")
@@ -337,7 +337,7 @@ func writeLuaEnum(b *strings.Builder, enum parser.Enum) {
 }
 
 func writeLuaConstructor(b *strings.Builder, msg parser.Message, enumNames map[string]struct{}) {
-	fmt.Fprintf(b, "function M.new_%s()\n", toSnakeCase(msg.Name))
+	fmt.Fprintf(b, "function M.new_%s()\n", ToSnakeCase(msg.Name))
 	b.WriteString("    return {\n")
 	for _, f := range msg.Fields {
 		defaultValue := luaDefaultValue(f, enumNames)
@@ -347,16 +347,16 @@ func writeLuaConstructor(b *strings.Builder, msg parser.Message, enumNames map[s
 	b.WriteString("end\n")
 }
 
-func writeLuaSerializer(b *strings.Builder, msg parser.Message, enumNames map[string]struct{}) error {
+func writeLuaSerializer(b *strings.Builder, msg parser.Message) error {
 	segs := segmentFields(msg.Fields)
 
-	fmt.Fprintf(b, "function M.serialize_%s(msg)\n", toSnakeCase(msg.Name))
+	fmt.Fprintf(b, "function M.serialize_%s(msg)\n", ToSnakeCase(msg.Name))
 	b.WriteString("    local parts = {}\n")
 	b.WriteString("    local part_idx = 0\n")
 
 	for i, seg := range segs {
 		if seg.single != nil {
-			if err := writeLuaSerializeField(b, "msg", *seg.single, "    ", enumNames); err != nil {
+			if err := writeLuaSerializeField(b, "msg", *seg.single, "    "); err != nil {
 				return err
 			}
 		} else {
@@ -369,13 +369,13 @@ func writeLuaSerializer(b *strings.Builder, msg parser.Message, enumNames map[st
 	return nil
 }
 
-func writeLuaDeserializer(b *strings.Builder, msg parser.Message, enumNames map[string]struct{}, needsBoundsCheck bool) error {
+func writeLuaDeserializer(b *strings.Builder, msg parser.Message, needsBoundsCheck bool) error {
 	segs := segmentFields(msg.Fields)
 	minSize := packedMinWireSize(msg.Fields)
 
-	fmt.Fprintf(b, "function M.deserialize_%s(data, offset)\n", toSnakeCase(msg.Name))
+	fmt.Fprintf(b, "function M.deserialize_%s(data, offset)\n", ToSnakeCase(msg.Name))
 	b.WriteString("    offset = offset or 1\n")
-	fmt.Fprintf(b, "    local msg = M.new_%s()\n", toSnakeCase(msg.Name))
+	fmt.Fprintf(b, "    local msg = M.new_%s()\n", ToSnakeCase(msg.Name))
 	b.WriteString("    local start_offset = offset\n")
 	b.WriteString("    local bytes_read = 0\n")
 	fmt.Fprintf(b, "    if #data < offset + %d - 1 then\n", minSize)
@@ -384,7 +384,7 @@ func writeLuaDeserializer(b *strings.Builder, msg parser.Message, enumNames map[
 
 	for i, seg := range segs {
 		if seg.single != nil {
-			if err := writeLuaDeserializeField(b, "msg", *seg.single, "    ", enumNames, needsBoundsCheck); err != nil {
+			if err := writeLuaDeserializeField(b, "msg", *seg.single, "    ", needsBoundsCheck); err != nil {
 				return err
 			}
 		} else {
@@ -418,35 +418,26 @@ func writeLuaBoolGroupDeserialize(b *strings.Builder, recv string, bools []parse
 	}
 }
 
-func writeLuaSerializeField(b *strings.Builder, recv string, f parser.Field, indent string, enumNames map[string]struct{}) error {
+func writeLuaSerializeField(b *strings.Builder, recv string, f parser.Field, indent string) error {
 	access := luaFieldAccess(recv, f.Name)
 	switch f.Kind {
 	case parser.KindPrimitive:
-		return writeLuaSerializePrimitive(b, access, f, indent, enumNames)
+		return writeLuaSerializePrimitive(b, access, f, indent)
 	case parser.KindNested:
-		fmt.Fprintf(b, "%slocal _nested_%s = M.serialize_%s(%s)\n", indent, f.Name, toSnakeCase(f.TypeName), access)
+		fmt.Fprintf(b, "%slocal _nested_%s = M.serialize_%s(%s)\n", indent, f.Name, ToSnakeCase(f.TypeName), access)
 		fmt.Fprintf(b, "%spart_idx = part_idx + 1; parts[part_idx] = _nested_%s\n", indent, f.Name)
 	case parser.KindFixedArray:
 		iVar := "_i_" + strings.ToLower(f.Name)
 		fmt.Fprintf(b, "%sfor %s = 1, %d do\n", indent, iVar, f.FixedLen)
 		if f.Elem.Kind == parser.KindNested {
-			// For nested types in fixed arrays, serialize directly using indexed access
 			fmt.Fprintf(b, "%slocal _nested_%s = M.serialize_%s(%s[%s])\n",
-				indent, f.Name, toSnakeCase(f.Elem.TypeName), access, iVar)
+				indent, f.Name, ToSnakeCase(f.Elem.TypeName), access, iVar)
 			fmt.Fprintf(b, "%spart_idx = part_idx + 1; parts[part_idx] = _nested_%s\n",
 				indent, f.Name)
 		} else {
-			elemField := parser.Field{
-				Name:      f.Name + "[" + iVar + "]",
-				Kind:      f.Elem.Kind,
-				Primitive: f.Elem.Primitive,
-				NamedType: f.Elem.NamedType,
-				Quant:     f.Elem.Quant,
-				TypeName:  f.Elem.TypeName,
-				Elem:      f.Elem.Elem,
-				FixedLen:  f.Elem.FixedLen,
-			}
-			if err := writeLuaSerializeField(b, recv, elemField, indent+"    ", enumNames); err != nil {
+			elemField := *f.Elem
+			elemField.Name = f.Name + "[" + iVar + "]"
+			if err := writeLuaSerializeField(b, recv, elemField, indent+"    "); err != nil {
 				return err
 			}
 		}
@@ -454,29 +445,20 @@ func writeLuaSerializeField(b *strings.Builder, recv string, f parser.Field, ind
 	case parser.KindSlice:
 		lenVar := "_len_" + strings.ToLower(f.Name)
 		fmt.Fprintf(b, "%slocal %s = #(%s or {})\n", indent, lenVar, access)
-		fmt.Fprintf(b, "%s%s = ensure_u16_limit(%s, %q)\n", indent, lenVar, lenVar, "slice length for "+luaFieldName(f.Name))
+		fmt.Fprintf(b, "%s%s = ensure_u16_limit(%s, %q)\n", indent, lenVar, lenVar, "slice length for "+ToSnakeCase(f.Name))
 		fmt.Fprintf(b, "%spart_idx = part_idx + 1; parts[part_idx] = write_u16_le(%s)\n", indent, lenVar)
 		iVar := "_i_" + strings.ToLower(f.Name)
 		fmt.Fprintf(b, "%sfor %s = 1, %s do\n", indent, iVar, lenVar)
 
 		if f.Elem.Kind == parser.KindNested {
-			// For nested types in slices, serialize directly
 			fmt.Fprintf(b, "%slocal _nested_%s = M.serialize_%s(%s[%s])\n",
-				indent, f.Name, toSnakeCase(f.Elem.TypeName), access, iVar)
+				indent, f.Name, ToSnakeCase(f.Elem.TypeName), access, iVar)
 			fmt.Fprintf(b, "%spart_idx = part_idx + 1; parts[part_idx] = _nested_%s\n",
 				indent, f.Name)
 		} else {
-			elemField := parser.Field{
-				Name:      f.Name + "[" + iVar + "]",
-				Kind:      f.Elem.Kind,
-				Primitive: f.Elem.Primitive,
-				NamedType: f.Elem.NamedType,
-				Quant:     f.Elem.Quant,
-				TypeName:  f.Elem.TypeName,
-				Elem:      f.Elem.Elem,
-				FixedLen:  f.Elem.FixedLen,
-			}
-			if err := writeLuaSerializeField(b, recv, elemField, indent+"    ", enumNames); err != nil {
+			elemField := *f.Elem
+			elemField.Name = f.Name + "[" + iVar + "]"
+			if err := writeLuaSerializeField(b, recv, elemField, indent+"    "); err != nil {
 				return err
 			}
 		}
@@ -485,35 +467,34 @@ func writeLuaSerializeField(b *strings.Builder, recv string, f parser.Field, ind
 	return nil
 }
 
-func writeLuaSerializePrimitive(b *strings.Builder, access string, f parser.Field, indent string, enumNames map[string]struct{}) error {
+func writeLuaSerializePrimitive(b *strings.Builder, access string, f parser.Field, indent string) error {
 	if f.Quant != nil {
 		return writeLuaSerializeQuant(b, access, f, indent)
 	}
 
-	valueExpr := luaSerializeValueExpr(access, f, enumNames)
 	switch f.Primitive {
 	case parser.KindFloat32:
-		fmt.Fprintf(b, "%spart_idx = part_idx + 1; parts[part_idx] = write_f32_le(%s)\n", indent, valueExpr)
+		fmt.Fprintf(b, "%spart_idx = part_idx + 1; parts[part_idx] = write_f32_le(%s)\n", indent, access)
 	case parser.KindFloat64:
-		fmt.Fprintf(b, "%spart_idx = part_idx + 1; parts[part_idx] = write_f64_le(%s)\n", indent, valueExpr)
+		fmt.Fprintf(b, "%spart_idx = part_idx + 1; parts[part_idx] = write_f64_le(%s)\n", indent, access)
 	case parser.KindInt8:
-		fmt.Fprintf(b, "%spart_idx = part_idx + 1; parts[part_idx] = write_i8(%s)\n", indent, valueExpr)
+		fmt.Fprintf(b, "%spart_idx = part_idx + 1; parts[part_idx] = write_i8(%s)\n", indent, access)
 	case parser.KindUint8:
-		fmt.Fprintf(b, "%spart_idx = part_idx + 1; parts[part_idx] = write_u8(%s)\n", indent, valueExpr)
+		fmt.Fprintf(b, "%spart_idx = part_idx + 1; parts[part_idx] = write_u8(%s)\n", indent, access)
 	case parser.KindBool:
-		fmt.Fprintf(b, "%spart_idx = part_idx + 1; parts[part_idx] = write_bool(%s)\n", indent, valueExpr)
+		fmt.Fprintf(b, "%spart_idx = part_idx + 1; parts[part_idx] = write_bool(%s)\n", indent, access)
 	case parser.KindInt16:
-		fmt.Fprintf(b, "%spart_idx = part_idx + 1; parts[part_idx] = write_i16_le(%s)\n", indent, valueExpr)
+		fmt.Fprintf(b, "%spart_idx = part_idx + 1; parts[part_idx] = write_i16_le(%s)\n", indent, access)
 	case parser.KindUint16:
-		fmt.Fprintf(b, "%spart_idx = part_idx + 1; parts[part_idx] = write_u16_le(%s)\n", indent, valueExpr)
+		fmt.Fprintf(b, "%spart_idx = part_idx + 1; parts[part_idx] = write_u16_le(%s)\n", indent, access)
 	case parser.KindInt32:
-		fmt.Fprintf(b, "%spart_idx = part_idx + 1; parts[part_idx] = write_i32_le(%s)\n", indent, valueExpr)
+		fmt.Fprintf(b, "%spart_idx = part_idx + 1; parts[part_idx] = write_i32_le(%s)\n", indent, access)
 	case parser.KindUint32:
-		fmt.Fprintf(b, "%spart_idx = part_idx + 1; parts[part_idx] = write_u32_le(%s)\n", indent, valueExpr)
+		fmt.Fprintf(b, "%spart_idx = part_idx + 1; parts[part_idx] = write_u32_le(%s)\n", indent, access)
 	case parser.KindInt64, parser.KindUint64:
 		return fmt.Errorf("int64/uint64 serialization not supported in Lua")
 	case parser.KindString:
-		fmt.Fprintf(b, "%spart_idx = part_idx + 1; parts[part_idx] = write_string(%s or '')\n", indent, valueExpr)
+		fmt.Fprintf(b, "%spart_idx = part_idx + 1; parts[part_idx] = write_string(%s or '')\n", indent, access)
 	}
 	return nil
 }
@@ -534,14 +515,14 @@ func writeLuaSerializeQuant(b *strings.Builder, access string, f parser.Field, i
 	return nil
 }
 
-func writeLuaDeserializeField(b *strings.Builder, recv string, f parser.Field, indent string, enumNames map[string]struct{}, needsBoundsCheck bool) error {
+func writeLuaDeserializeField(b *strings.Builder, recv string, f parser.Field, indent string, needsBoundsCheck bool) error {
 	access := luaFieldAccess(recv, f.Name)
 	switch f.Kind {
 	case parser.KindPrimitive:
-		return writeLuaDeserializePrimitive(b, access, f, indent, enumNames, needsBoundsCheck)
+		return writeLuaDeserializePrimitive(b, access, f, indent, needsBoundsCheck)
 	case parser.KindNested:
 		sanName := sanitizeLuaVarName(f.Name)
-		fmt.Fprintf(b, "%slocal _nested_%s, _n_%s = M.deserialize_%s(data, offset)\n", indent, sanName, sanName, toSnakeCase(f.TypeName))
+		fmt.Fprintf(b, "%slocal _nested_%s, _n_%s = M.deserialize_%s(data, offset)\n", indent, sanName, sanName, ToSnakeCase(f.TypeName))
 		fmt.Fprintf(b, "%s%s = _nested_%s\n", indent, access, sanName)
 		fmt.Fprintf(b, "%soffset = offset + _n_%s\n", indent, sanName)
 	case parser.KindFixedArray:
@@ -551,23 +532,15 @@ func writeLuaDeserializeField(b *strings.Builder, recv string, f parser.Field, i
 		if f.Elem.Kind == parser.KindNested {
 			sanName := sanitizeLuaVarName(f.Name)
 			fmt.Fprintf(b, "%slocal _nested_%s, _n_%s = M.deserialize_%s(data, offset)\n",
-				indent, sanName, sanName, toSnakeCase(f.Elem.TypeName))
+				indent, sanName, sanName, ToSnakeCase(f.Elem.TypeName))
 			fmt.Fprintf(b, "%s%s[%s] = _nested_%s\n",
 				indent, access, iVar, sanName)
 			fmt.Fprintf(b, "%soffset = offset + _n_%s\n",
 				indent, sanName)
 		} else {
-			elemField := parser.Field{
-				Name:      f.Name + "[" + iVar + "]",
-				Kind:      f.Elem.Kind,
-				Primitive: f.Elem.Primitive,
-				NamedType: f.Elem.NamedType,
-				Quant:     f.Elem.Quant,
-				TypeName:  f.Elem.TypeName,
-				Elem:      f.Elem.Elem,
-				FixedLen:  f.Elem.FixedLen,
-			}
-			if err := writeLuaDeserializeField(b, recv, elemField, indent+"    ", enumNames, needsBoundsCheck); err != nil {
+			elemField := *f.Elem
+			elemField.Name = f.Name + "[" + iVar + "]"
+			if err := writeLuaDeserializeField(b, recv, elemField, indent+"    ", needsBoundsCheck); err != nil {
 				return err
 			}
 		}
@@ -581,25 +554,16 @@ func writeLuaDeserializeField(b *strings.Builder, recv string, f parser.Field, i
 		fmt.Fprintf(b, "%sfor %s = 1, %s do\n", indent, iVar, lenVar)
 
 		if f.Elem.Kind == parser.KindNested {
-			// For nested types in slices, deserialize directly
 			fmt.Fprintf(b, "%slocal _nested_%s, _n_%s = M.deserialize_%s(data, offset)\n",
-				indent, f.Name, f.Name, toSnakeCase(f.Elem.TypeName))
+				indent, f.Name, f.Name, ToSnakeCase(f.Elem.TypeName))
 			fmt.Fprintf(b, "%s%s[%s] = _nested_%s\n",
 				indent, access, iVar, f.Name)
 			fmt.Fprintf(b, "%soffset = offset + _n_%s\n",
 				indent, f.Name)
 		} else {
-			elemField := parser.Field{
-				Name:      f.Name + "[" + iVar + "]",
-				Kind:      f.Elem.Kind,
-				Primitive: f.Elem.Primitive,
-				NamedType: f.Elem.NamedType,
-				Quant:     f.Elem.Quant,
-				TypeName:  f.Elem.TypeName,
-				Elem:      f.Elem.Elem,
-				FixedLen:  f.Elem.FixedLen,
-			}
-			if err := writeLuaDeserializeField(b, recv, elemField, indent+"    ", enumNames, needsBoundsCheck); err != nil {
+			elemField := *f.Elem
+			elemField.Name = f.Name + "[" + iVar + "]"
+			if err := writeLuaDeserializeField(b, recv, elemField, indent+"    ", needsBoundsCheck); err != nil {
 				return err
 			}
 		}
@@ -608,9 +572,9 @@ func writeLuaDeserializeField(b *strings.Builder, recv string, f parser.Field, i
 	return nil
 }
 
-func writeLuaDeserializePrimitive(b *strings.Builder, access string, f parser.Field, indent string, enumNames map[string]struct{}, needsBoundsCheck bool) error {
+func writeLuaDeserializePrimitive(b *strings.Builder, access string, f parser.Field, indent string, needsBoundsCheck bool) error {
 	if f.Quant != nil {
-		return writeLuaDeserializeQuant(b, access, f, indent, enumNames)
+		return writeLuaDeserializeQuant(b, access, f, indent)
 	}
 
 	varName := "_v_" + sanitizeLuaVarName(access)
@@ -620,76 +584,75 @@ func writeLuaDeserializePrimitive(b *strings.Builder, access string, f parser.Fi
 			fmt.Fprintf(b, "%scheck_bounds(data, offset, 4, %q)\n", indent, f.Name)
 		}
 		fmt.Fprintf(b, "%slocal %s, _n = read_f32_le(data, offset)\n", indent, varName)
-		fmt.Fprintf(b, "%s%s = %s\n", indent, access, luaDeserializeValueExpr(varName, f, enumNames))
+		fmt.Fprintf(b, "%s%s = %s\n", indent, access, varName)
 		fmt.Fprintf(b, "%soffset = offset + _n\n", indent)
 	case parser.KindFloat64:
 		if needsBoundsCheck {
 			fmt.Fprintf(b, "%scheck_bounds(data, offset, 8, %q)\n", indent, f.Name)
 		}
 		fmt.Fprintf(b, "%slocal %s, _n = read_f64_le(data, offset)\n", indent, varName)
-		fmt.Fprintf(b, "%s%s = %s\n", indent, access, luaDeserializeValueExpr(varName, f, enumNames))
+		fmt.Fprintf(b, "%s%s = %s\n", indent, access, varName)
 		fmt.Fprintf(b, "%soffset = offset + _n\n", indent)
 	case parser.KindInt8:
 		if needsBoundsCheck {
 			fmt.Fprintf(b, "%scheck_bounds(data, offset, 1, %q)\n", indent, f.Name)
 		}
 		fmt.Fprintf(b, "%slocal %s, _n = read_i8(data, offset)\n", indent, varName)
-		fmt.Fprintf(b, "%s%s = %s\n", indent, access, luaDeserializeValueExpr(varName, f, enumNames))
+		fmt.Fprintf(b, "%s%s = %s\n", indent, access, varName)
 		fmt.Fprintf(b, "%soffset = offset + _n\n", indent)
 	case parser.KindUint8:
 		if needsBoundsCheck {
 			fmt.Fprintf(b, "%scheck_bounds(data, offset, 1, %q)\n", indent, f.Name)
 		}
 		fmt.Fprintf(b, "%slocal %s, _n = read_u8(data, offset)\n", indent, varName)
-		fmt.Fprintf(b, "%s%s = %s\n", indent, access, luaDeserializeValueExpr(varName, f, enumNames))
+		fmt.Fprintf(b, "%s%s = %s\n", indent, access, varName)
 		fmt.Fprintf(b, "%soffset = offset + _n\n", indent)
 	case parser.KindBool:
 		if needsBoundsCheck {
 			fmt.Fprintf(b, "%scheck_bounds(data, offset, 1, %q)\n", indent, f.Name)
 		}
 		fmt.Fprintf(b, "%slocal %s, _n = read_bool(data, offset)\n", indent, varName)
-		fmt.Fprintf(b, "%s%s = %s\n", indent, access, luaDeserializeValueExpr(varName, f, enumNames))
+		fmt.Fprintf(b, "%s%s = %s\n", indent, access, varName)
 		fmt.Fprintf(b, "%soffset = offset + _n\n", indent)
 	case parser.KindInt16:
 		if needsBoundsCheck {
 			fmt.Fprintf(b, "%scheck_bounds(data, offset, 2, %q)\n", indent, f.Name)
 		}
 		fmt.Fprintf(b, "%slocal %s, _n = read_i16_le(data, offset)\n", indent, varName)
-		fmt.Fprintf(b, "%s%s = %s\n", indent, access, luaDeserializeValueExpr(varName, f, enumNames))
+		fmt.Fprintf(b, "%s%s = %s\n", indent, access, varName)
 		fmt.Fprintf(b, "%soffset = offset + _n\n", indent)
 	case parser.KindUint16:
 		if needsBoundsCheck {
 			fmt.Fprintf(b, "%scheck_bounds(data, offset, 2, %q)\n", indent, f.Name)
 		}
 		fmt.Fprintf(b, "%slocal %s, _n = read_u16_le(data, offset)\n", indent, varName)
-		fmt.Fprintf(b, "%s%s = %s\n", indent, access, luaDeserializeValueExpr(varName, f, enumNames))
+		fmt.Fprintf(b, "%s%s = %s\n", indent, access, varName)
 		fmt.Fprintf(b, "%soffset = offset + _n\n", indent)
 	case parser.KindInt32:
 		if needsBoundsCheck {
 			fmt.Fprintf(b, "%scheck_bounds(data, offset, 4, %q)\n", indent, f.Name)
 		}
 		fmt.Fprintf(b, "%slocal %s, _n = read_i32_le(data, offset)\n", indent, varName)
-		fmt.Fprintf(b, "%s%s = %s\n", indent, access, luaDeserializeValueExpr(varName, f, enumNames))
+		fmt.Fprintf(b, "%s%s = %s\n", indent, access, varName)
 		fmt.Fprintf(b, "%soffset = offset + _n\n", indent)
 	case parser.KindUint32:
 		if needsBoundsCheck {
 			fmt.Fprintf(b, "%scheck_bounds(data, offset, 4, %q)\n", indent, f.Name)
 		}
 		fmt.Fprintf(b, "%slocal %s, _n = read_u32_le(data, offset)\n", indent, varName)
-		fmt.Fprintf(b, "%s%s = %s\n", indent, access, luaDeserializeValueExpr(varName, f, enumNames))
+		fmt.Fprintf(b, "%s%s = %s\n", indent, access, varName)
 		fmt.Fprintf(b, "%soffset = offset + _n\n", indent)
 	case parser.KindInt64, parser.KindUint64:
 		return fmt.Errorf("int64/uint64 deserialization not supported in Lua")
 	case parser.KindString:
-		// string reads are already bounds-checked inside read_string
 		fmt.Fprintf(b, "%slocal %s, _n = read_string(data, offset)\n", indent, varName)
-		fmt.Fprintf(b, "%s%s = %s\n", indent, access, luaDeserializeValueExpr(varName, f, enumNames))
+		fmt.Fprintf(b, "%s%s = %s\n", indent, access, varName)
 		fmt.Fprintf(b, "%soffset = offset + _n\n", indent)
 	}
 	return nil
 }
 
-func writeLuaDeserializeQuant(b *strings.Builder, access string, f parser.Field, indent string, enumNames map[string]struct{}) error {
+func writeLuaDeserializeQuant(b *strings.Builder, access string, f parser.Field, indent string) error {
 	q := f.Quant
 	varName := "_q_" + sanitizeLuaVarName(access)
 	if q.Bits == 8 {
@@ -700,16 +663,12 @@ func writeLuaDeserializeQuant(b *strings.Builder, access string, f parser.Field,
 		fmt.Fprintf(b, "%soffset = offset + 2\n", indent)
 	}
 	expr := dequantizeExpr("lua", varName, q, f.Primitive)
-	fmt.Fprintf(b, "%s%s = %s\n", indent, access, luaDeserializeValueExpr(expr, f, enumNames))
+	fmt.Fprintf(b, "%s%s = %s\n", indent, access, expr)
 	return nil
 }
 
-func luaFieldName(name string) string {
-	return toSnakeCase(name)
-}
-
 func luaFieldKey(name string) string {
-	fieldName := luaFieldName(name)
+	fieldName := ToSnakeCase(name)
 	if isLuaIdentifier(fieldName) && !isLuaKeyword(fieldName) {
 		return fieldName
 	}
@@ -724,7 +683,7 @@ func luaFieldAccess(recv, name string) string {
 		suffix = name[idx:]
 	}
 
-	fieldName := luaFieldName(base)
+	fieldName := ToSnakeCase(base)
 	if isLuaIdentifier(fieldName) && !isLuaKeyword(fieldName) {
 		return recv + "." + fieldName + suffix
 	}
@@ -757,7 +716,7 @@ func isLuaKeyword(s string) bool {
 	return false
 }
 
-func toSnakeCase(s string) string {
+func ToSnakeCase(s string) string {
 	if s == "" {
 		return ""
 	}
@@ -768,11 +727,6 @@ func toSnakeCase(s string) string {
 	for i, c := range s {
 		isUpper := c >= 'A' && c <= 'Z'
 
-		// Add underscore before uppercase letter if:
-		// - It's not the first character
-		// - Previous character was lowercase, OR
-		// - Previous character was uppercase AND next character (if exists) is lowercase
-		//   (this handles cases like "PlayerID" -> "player_id", not "player_i_d")
 		if i > 0 && isUpper {
 			nextLower := false
 			if i+1 < len(s) {
@@ -808,25 +762,11 @@ func luaDefaultValue(f parser.Field, enumNames map[string]struct{}) string {
 			return "''"
 		}
 	case parser.KindNested:
-		return fmt.Sprintf("M.new_%s()", toSnakeCase(f.TypeName))
+		return fmt.Sprintf("M.new_%s()", ToSnakeCase(f.TypeName))
 	case parser.KindFixedArray, parser.KindSlice:
 		return "{}"
 	}
 	return "nil"
-}
-
-func luaSerializeValueExpr(access string, f parser.Field, enumNames map[string]struct{}) string {
-	if !luaIsEnumType(f, enumNames) {
-		return access
-	}
-	return access
-}
-
-func luaDeserializeValueExpr(expr string, f parser.Field, enumNames map[string]struct{}) string {
-	if !luaIsEnumType(f, enumNames) {
-		return expr
-	}
-	return expr
 }
 
 func luaIsEnumType(f parser.Field, enumNames map[string]struct{}) bool {
@@ -850,25 +790,14 @@ func sanitizeLuaVarName(s string) string {
 }
 
 func checkLuaUnsupportedTypes(schema parser.Schema) error {
+	is64 := func(f parser.Field) bool {
+		return f.Kind == parser.KindPrimitive && (f.Primitive == parser.KindInt64 || f.Primitive == parser.KindUint64)
+	}
 	for _, msg := range schema.Messages {
 		for _, f := range msg.Fields {
-			if err := checkFieldLuaSupport(msg.Name, f); err != nil {
-				return err
+			if hasField(f, is64) {
+				return fmt.Errorf("lua target does not support int64/uint64: field %s in message %s (LuaJIT/Defold uses double-precision floats which can only safely represent integers up to 2^53)", f.Name, msg.Name)
 			}
-		}
-	}
-	return nil
-}
-
-func checkFieldLuaSupport(msgName string, f parser.Field) error {
-	switch f.Kind {
-	case parser.KindPrimitive:
-		if f.Primitive == parser.KindInt64 || f.Primitive == parser.KindUint64 {
-			return fmt.Errorf("lua target does not support int64/uint64: field %s in message %s (LuaJIT/Defold uses double-precision floats which can only safely represent integers up to 2^53)", f.Name, msgName)
-		}
-	case parser.KindFixedArray, parser.KindSlice:
-		if f.Elem != nil {
-			return checkFieldLuaSupport(msgName, *f.Elem)
 		}
 	}
 	return nil

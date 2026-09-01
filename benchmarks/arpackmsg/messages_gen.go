@@ -15,18 +15,6 @@ func arpackEnsureUint16Length(length int, context string) uint16 {
 	return uint16(length)
 }
 
-func arpackStringEqualBytes(s string, data []byte) bool {
-	if len(s) != len(data) {
-		return false
-	}
-	for i := 0; i < len(s); i++ {
-		if s[i] != data[i] {
-			return false
-		}
-	}
-	return true
-}
-
 func (m *Vector3) Marshal(buf []byte) []byte {
 	buf = binary.LittleEndian.AppendUint32(buf, math.Float32bits(m.X))
 	buf = binary.LittleEndian.AppendUint32(buf, math.Float32bits(m.Y))
@@ -147,7 +135,7 @@ func (m *MoveMessage) Unmarshal(data []byte) (int, error) {
 		return 0, errors.New("arpack: buffer too short")
 	}
 	_bm_Name := data[offset : offset+_slenm_Name]
-	if !arpackStringEqualBytes(m.Name, _bm_Name) {
+	if m.Name != string(_bm_Name) {
 		m.Name = string(_bm_Name)
 	}
 	offset += _slenm_Name
@@ -217,7 +205,7 @@ func (m *SpawnMessage) Unmarshal(data []byte) (int, error) {
 			return 0, errors.New("arpack: buffer too short")
 		}
 		_bm_Tags__iTags_ := data[offset : offset+_slenm_Tags__iTags_]
-		if !arpackStringEqualBytes(m.Tags[_iTags], _bm_Tags__iTags_) {
+		if m.Tags[_iTags] != string(_bm_Tags__iTags_) {
 			m.Tags[_iTags] = string(_bm_Tags__iTags_)
 		}
 		offset += _slenm_Tags__iTags_

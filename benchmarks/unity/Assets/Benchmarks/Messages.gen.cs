@@ -7,8 +7,156 @@ using System.Text;
 
 namespace Arpack.Messages
 {
-    internal static class ArpackGenerated
+    internal static unsafe class ArpackGenerated
     {
+        internal static void EnsureReadable(byte* ptr, byte* end, int needed, string context)
+        {
+            if (needed < 0 || ptr > end || end - ptr < needed)
+            {
+                long available = ptr > end ? 0 : end - ptr;
+                throw new ArgumentException("arpack: buffer too short for " + context + ": need " + needed + " bytes, have " + available);
+            }
+        }
+
+        internal static void EnsureWritable(byte* ptr, byte* end, int needed, string context)
+        {
+            if (needed < 0 || ptr > end || end - ptr < needed)
+            {
+                long available = ptr > end ? 0 : end - ptr;
+                throw new ArgumentException("arpack: buffer too small for " + context + ": need " + needed + " bytes, have " + available);
+            }
+        }
+
+        internal static void EnsureFixedArray(Array value, int expectedLength, string context)
+        {
+            if (value == null)
+            {
+                throw new InvalidOperationException("arpack: " + context + " is null; expected length " + expectedLength);
+            }
+            if (value.Length != expectedLength)
+            {
+                throw new InvalidOperationException("arpack: " + context + " length mismatch: expected " + expectedLength + ", got " + value.Length);
+            }
+        }
+
+        internal static void WriteU16LE(byte* ptr, ushort value)
+        {
+            ptr[0] = (byte)value;
+            ptr[1] = (byte)(value >> 8);
+        }
+
+        internal static ushort ReadU16LE(byte* ptr)
+        {
+            return (ushort)(ptr[0] | (ptr[1] << 8));
+        }
+
+        internal static void WriteI16LE(byte* ptr, short value)
+        {
+            WriteU16LE(ptr, (ushort)value);
+        }
+
+        internal static short ReadI16LE(byte* ptr)
+        {
+            return (short)ReadU16LE(ptr);
+        }
+
+        internal static void WriteU32LE(byte* ptr, uint value)
+        {
+            ptr[0] = (byte)value;
+            ptr[1] = (byte)(value >> 8);
+            ptr[2] = (byte)(value >> 16);
+            ptr[3] = (byte)(value >> 24);
+        }
+
+        internal static uint ReadU32LE(byte* ptr)
+        {
+            return (uint)(ptr[0] | (ptr[1] << 8) | (ptr[2] << 16) | (ptr[3] << 24));
+        }
+
+        internal static void WriteI32LE(byte* ptr, int value)
+        {
+            WriteU32LE(ptr, (uint)value);
+        }
+
+        internal static int ReadI32LE(byte* ptr)
+        {
+            return (int)ReadU32LE(ptr);
+        }
+
+        internal static void WriteU64LE(byte* ptr, ulong value)
+        {
+            ptr[0] = (byte)value;
+            ptr[1] = (byte)(value >> 8);
+            ptr[2] = (byte)(value >> 16);
+            ptr[3] = (byte)(value >> 24);
+            ptr[4] = (byte)(value >> 32);
+            ptr[5] = (byte)(value >> 40);
+            ptr[6] = (byte)(value >> 48);
+            ptr[7] = (byte)(value >> 56);
+        }
+
+        internal static ulong ReadU64LE(byte* ptr)
+        {
+            return (ulong)ptr[0] |
+                ((ulong)ptr[1] << 8) |
+                ((ulong)ptr[2] << 16) |
+                ((ulong)ptr[3] << 24) |
+                ((ulong)ptr[4] << 32) |
+                ((ulong)ptr[5] << 40) |
+                ((ulong)ptr[6] << 48) |
+                ((ulong)ptr[7] << 56);
+        }
+
+        internal static void WriteI64LE(byte* ptr, long value)
+        {
+            WriteU64LE(ptr, (ulong)value);
+        }
+
+        internal static long ReadI64LE(byte* ptr)
+        {
+            return (long)ReadU64LE(ptr);
+        }
+
+        internal static uint Float32ToBits(float value)
+        {
+            return *(uint*)&value;
+        }
+
+        internal static float BitsToFloat32(uint value)
+        {
+            return *(float*)&value;
+        }
+
+        internal static ulong Float64ToBits(double value)
+        {
+            return *(ulong*)&value;
+        }
+
+        internal static double BitsToFloat64(ulong value)
+        {
+            return *(double*)&value;
+        }
+
+        internal static void WriteFloat32LE(byte* ptr, float value)
+        {
+            WriteU32LE(ptr, Float32ToBits(value));
+        }
+
+        internal static float ReadFloat32LE(byte* ptr)
+        {
+            return BitsToFloat32(ReadU32LE(ptr));
+        }
+
+        internal static void WriteFloat64LE(byte* ptr, double value)
+        {
+            WriteU64LE(ptr, Float64ToBits(value));
+        }
+
+        internal static double ReadFloat64LE(byte* ptr)
+        {
+            return BitsToFloat64(ReadU64LE(ptr));
+        }
+
         internal static ushort EnsureU16Length(int length, string context)
         {
             if (length > 65535)
@@ -18,20 +166,13 @@ namespace Arpack.Messages
             return (ushort)length;
         }
 
-        internal static void EnsureQuantizedRange(double value, double min, double max, string context)
-        {
-            if (double.IsNaN(value) || value < min || value > max)
-            {
-                throw new ArgumentOutOfRangeException(context, "arpack: quantized value out of range for " + context);
-            }
-        }
     }
 
     public enum Opcode : ushort
     {
-        Unknown = 0,
-        Authorize = 1,
-        JoinRoom = 2
+        OpcodeUnknown = 0,
+        OpcodeAuthorize = 1,
+        OpcodeJoinRoom = 2
     }
 
     public unsafe struct Vector3
@@ -40,25 +181,46 @@ namespace Arpack.Messages
         public float Y;
         public float Z;
 
-        public int Serialize(byte* buffer)
+        public int Serialize(Span<byte> buffer)
+        {
+            fixed (byte* ptr = buffer)
+            {
+                return Serialize(ptr, buffer.Length);
+            }
+        }
+
+        public int Serialize(byte* buffer, int length)
         {
             byte* ptr = buffer;
-            ArpackGenerated.EnsureQuantizedRange(X, -500, 500, "X");
-            *(ushort*)ptr = (ushort)((X - (-500f)) / (500f - (-500f)) * 65535f); ptr += 2;
-            ArpackGenerated.EnsureQuantizedRange(Y, -500, 500, "Y");
-            *(ushort*)ptr = (ushort)((Y - (-500f)) / (500f - (-500f)) * 65535f); ptr += 2;
-            ArpackGenerated.EnsureQuantizedRange(Z, -500, 500, "Z");
-            *(ushort*)ptr = (ushort)((Z - (-500f)) / (500f - (-500f)) * 65535f); ptr += 2;
+            byte* end = buffer + length;
+            ArpackGenerated.EnsureWritable(ptr, end, 4, "float32");
+            ArpackGenerated.WriteFloat32LE(ptr, X); ptr += 4;
+            ArpackGenerated.EnsureWritable(ptr, end, 4, "float32");
+            ArpackGenerated.WriteFloat32LE(ptr, Y); ptr += 4;
+            ArpackGenerated.EnsureWritable(ptr, end, 4, "float32");
+            ArpackGenerated.WriteFloat32LE(ptr, Z); ptr += 4;
             return (int)(ptr - buffer);
         }
 
-        public static int Deserialize(byte* buffer, out Vector3 msg)
+        public static int Deserialize(ReadOnlySpan<byte> data, out Vector3 msg)
+        {
+            fixed (byte* ptr = data)
+            {
+                return Deserialize(ptr, data.Length, out msg);
+            }
+        }
+
+        public static int Deserialize(byte* buffer, int length, out Vector3 msg)
         {
             byte* ptr = buffer;
+            byte* end = buffer + length;
             msg = default;
-            msg.X = (float)(*(ushort*)ptr) / 65535f * (500f - (-500f)) + (-500f); ptr += 2;
-            msg.Y = (float)(*(ushort*)ptr) / 65535f * (500f - (-500f)) + (-500f); ptr += 2;
-            msg.Z = (float)(*(ushort*)ptr) / 65535f * (500f - (-500f)) + (-500f); ptr += 2;
+            ArpackGenerated.EnsureReadable(ptr, end, 4, "float32");
+            msg.X = ArpackGenerated.ReadFloat32LE(ptr); ptr += 4;
+            ArpackGenerated.EnsureReadable(ptr, end, 4, "float32");
+            msg.Y = ArpackGenerated.ReadFloat32LE(ptr); ptr += 4;
+            ArpackGenerated.EnsureReadable(ptr, end, 4, "float32");
+            msg.Z = ArpackGenerated.ReadFloat32LE(ptr); ptr += 4;
             return (int)(ptr - buffer);
         }
     }
@@ -74,30 +236,46 @@ namespace Arpack.Messages
         public bool Ghost;
         public string Name;
 
-        public int Serialize(byte* buffer)
+        public int Serialize(Span<byte> buffer)
+        {
+            fixed (byte* ptr = buffer)
+            {
+                return Serialize(ptr, buffer.Length);
+            }
+        }
+
+        public int Serialize(byte* buffer, int length)
         {
             byte* ptr = buffer;
-            ptr += Position.Serialize(ptr);
+            byte* end = buffer + length;
+            ptr += Position.Serialize(ptr, (int)(end - ptr));
+            ArpackGenerated.EnsureFixedArray(Velocity, 3, "fixed array for Velocity");
             for (int _iVelocity = 0; _iVelocity < 3; _iVelocity++)
             {
-                *(float*)ptr = Velocity[_iVelocity]; ptr += 4;
+                ArpackGenerated.EnsureWritable(ptr, end, 4, "float32");
+                ArpackGenerated.WriteFloat32LE(ptr, Velocity[_iVelocity]); ptr += 4;
             }
-            ushort _lenWaypoints = ArpackGenerated.EnsureU16Length(Waypoints?.Length ?? 0, "slice length for Waypoints"); *(ushort*)ptr = _lenWaypoints; ptr += 2;
+            ArpackGenerated.EnsureWritable(ptr, end, 2, "slice length for Waypoints");
+            ushort _lenWaypoints = ArpackGenerated.EnsureU16Length(Waypoints?.Length ?? 0, "slice length for Waypoints"); ArpackGenerated.WriteU16LE(ptr, _lenWaypoints); ptr += 2;
             if (Waypoints != null)
             {
                 for (int _iWaypoints = 0; _iWaypoints < Waypoints.Length; _iWaypoints++)
                 {
-                    ptr += Waypoints[_iWaypoints].Serialize(ptr);
+                    ptr += Waypoints[_iWaypoints].Serialize(ptr, (int)(end - ptr));
                 }
             }
-            *(uint*)ptr = PlayerID; ptr += 4;
+            ArpackGenerated.EnsureWritable(ptr, end, 4, "uint32");
+            ArpackGenerated.WriteU32LE(ptr, PlayerID); ptr += 4;
             byte _boolByte4 = 0;
             if (Active) _boolByte4 |= (byte)(1 << 0);
             if (Visible) _boolByte4 |= (byte)(1 << 1);
             if (Ghost) _boolByte4 |= (byte)(1 << 2);
+            ArpackGenerated.EnsureWritable(ptr, end, 1, "bool group");
             *ptr = _boolByte4; ptr++;
             int _slenName = Name != null ? Encoding.UTF8.GetByteCount(Name) : 0;
-            *(ushort*)ptr = ArpackGenerated.EnsureU16Length(_slenName, "string length for Name"); ptr += 2;
+            ArpackGenerated.EnsureWritable(ptr, end, 2, "string length for Name");
+            ArpackGenerated.WriteU16LE(ptr, ArpackGenerated.EnsureU16Length(_slenName, "string length for Name")); ptr += 2;
+            ArpackGenerated.EnsureWritable(ptr, end, _slenName, "string data for Name");
             if (Name != null && _slenName > 0)
             {
                 fixed (char* _charsName = Name)
@@ -109,28 +287,45 @@ namespace Arpack.Messages
             return (int)(ptr - buffer);
         }
 
-        public static int Deserialize(byte* buffer, out MoveMessage msg)
+        public static int Deserialize(ReadOnlySpan<byte> data, out MoveMessage msg)
+        {
+            fixed (byte* ptr = data)
+            {
+                return Deserialize(ptr, data.Length, out msg);
+            }
+        }
+
+        public static int Deserialize(byte* buffer, int length, out MoveMessage msg)
         {
             byte* ptr = buffer;
+            byte* end = buffer + length;
             msg = default;
-            ptr += Vector3.Deserialize(ptr, out msg.Position);
+            int _nPosition = Vector3.Deserialize(ptr, (int)(end - ptr), out msg.Position);
+            ptr += _nPosition;
             msg.Velocity = new float[3];
             for (int _iVelocity = 0; _iVelocity < 3; _iVelocity++)
             {
-                msg.Velocity[_iVelocity] = *(float*)ptr; ptr += 4;
+                ArpackGenerated.EnsureReadable(ptr, end, 4, "float32");
+                msg.Velocity[_iVelocity] = ArpackGenerated.ReadFloat32LE(ptr); ptr += 4;
             }
-            int _lenWaypoints = *(ushort*)ptr; ptr += 2;
+            ArpackGenerated.EnsureReadable(ptr, end, 2, "slice length for Waypoints");
+            int _lenWaypoints = ArpackGenerated.ReadU16LE(ptr); ptr += 2;
             msg.Waypoints = new Vector3[_lenWaypoints];
             for (int _iWaypoints = 0; _iWaypoints < _lenWaypoints; _iWaypoints++)
             {
-                ptr += Vector3.Deserialize(ptr, out msg.Waypoints[_iWaypoints]);
+                int _nWaypoints__iWaypoints_ = Vector3.Deserialize(ptr, (int)(end - ptr), out msg.Waypoints[_iWaypoints]);
+                ptr += _nWaypoints__iWaypoints_;
             }
-            msg.PlayerID = *(uint*)ptr; ptr += 4;
+            ArpackGenerated.EnsureReadable(ptr, end, 4, "uint32");
+            msg.PlayerID = ArpackGenerated.ReadU32LE(ptr); ptr += 4;
+            ArpackGenerated.EnsureReadable(ptr, end, 1, "bool group");
             byte _boolByte4 = *ptr; ptr++;
             msg.Active = (_boolByte4 & (1 << 0)) != 0;
             msg.Visible = (_boolByte4 & (1 << 1)) != 0;
             msg.Ghost = (_boolByte4 & (1 << 2)) != 0;
-            int _slenmsg_Name = *(ushort*)ptr; ptr += 2;
+            ArpackGenerated.EnsureReadable(ptr, end, 2, "string length for Name");
+            int _slenmsg_Name = ArpackGenerated.ReadU16LE(ptr); ptr += 2;
+            ArpackGenerated.EnsureReadable(ptr, end, _slenmsg_Name, "string data for Name");
             msg.Name = _slenmsg_Name > 0 ? Encoding.UTF8.GetString(ptr, _slenmsg_Name) : string.Empty;
             ptr += _slenmsg_Name;
             return (int)(ptr - buffer);
@@ -145,19 +340,33 @@ namespace Arpack.Messages
         public string[] Tags;
         public byte[] Data;
 
-        public int Serialize(byte* buffer)
+        public int Serialize(Span<byte> buffer)
+        {
+            fixed (byte* ptr = buffer)
+            {
+                return Serialize(ptr, buffer.Length);
+            }
+        }
+
+        public int Serialize(byte* buffer, int length)
         {
             byte* ptr = buffer;
-            *(ulong*)ptr = EntityID; ptr += 8;
-            ptr += Position.Serialize(ptr);
-            *(short*)ptr = Health; ptr += 2;
-            ushort _lenTags = ArpackGenerated.EnsureU16Length(Tags?.Length ?? 0, "slice length for Tags"); *(ushort*)ptr = _lenTags; ptr += 2;
+            byte* end = buffer + length;
+            ArpackGenerated.EnsureWritable(ptr, end, 8, "uint64");
+            ArpackGenerated.WriteU64LE(ptr, EntityID); ptr += 8;
+            ptr += Position.Serialize(ptr, (int)(end - ptr));
+            ArpackGenerated.EnsureWritable(ptr, end, 2, "int16");
+            ArpackGenerated.WriteI16LE(ptr, Health); ptr += 2;
+            ArpackGenerated.EnsureWritable(ptr, end, 2, "slice length for Tags");
+            ushort _lenTags = ArpackGenerated.EnsureU16Length(Tags?.Length ?? 0, "slice length for Tags"); ArpackGenerated.WriteU16LE(ptr, _lenTags); ptr += 2;
             if (Tags != null)
             {
                 for (int _iTags = 0; _iTags < Tags.Length; _iTags++)
                 {
                     int _slenTags__iTags_ = Tags[_iTags] != null ? Encoding.UTF8.GetByteCount(Tags[_iTags]) : 0;
-                    *(ushort*)ptr = ArpackGenerated.EnsureU16Length(_slenTags__iTags_, "string length for Tags[_iTags]"); ptr += 2;
+                    ArpackGenerated.EnsureWritable(ptr, end, 2, "string length for Tags[_iTags]");
+                    ArpackGenerated.WriteU16LE(ptr, ArpackGenerated.EnsureU16Length(_slenTags__iTags_, "string length for Tags[_iTags]")); ptr += 2;
+                    ArpackGenerated.EnsureWritable(ptr, end, _slenTags__iTags_, "string data for Tags[_iTags]");
                     if (Tags[_iTags] != null && _slenTags__iTags_ > 0)
                     {
                         fixed (char* _charsTags__iTags_ = Tags[_iTags])
@@ -168,36 +377,55 @@ namespace Arpack.Messages
                     ptr += _slenTags__iTags_;
                 }
             }
-            ushort _lenData = ArpackGenerated.EnsureU16Length(Data?.Length ?? 0, "slice length for Data"); *(ushort*)ptr = _lenData; ptr += 2;
+            ArpackGenerated.EnsureWritable(ptr, end, 2, "slice length for Data");
+            ushort _lenData = ArpackGenerated.EnsureU16Length(Data?.Length ?? 0, "slice length for Data"); ArpackGenerated.WriteU16LE(ptr, _lenData); ptr += 2;
             if (Data != null)
             {
                 for (int _iData = 0; _iData < Data.Length; _iData++)
                 {
+                    ArpackGenerated.EnsureWritable(ptr, end, 1, "uint8");
                     *ptr = Data[_iData]; ptr += 1;
                 }
             }
             return (int)(ptr - buffer);
         }
 
-        public static int Deserialize(byte* buffer, out SpawnMessage msg)
+        public static int Deserialize(ReadOnlySpan<byte> data, out SpawnMessage msg)
+        {
+            fixed (byte* ptr = data)
+            {
+                return Deserialize(ptr, data.Length, out msg);
+            }
+        }
+
+        public static int Deserialize(byte* buffer, int length, out SpawnMessage msg)
         {
             byte* ptr = buffer;
+            byte* end = buffer + length;
             msg = default;
-            msg.EntityID = *(ulong*)ptr; ptr += 8;
-            ptr += Vector3.Deserialize(ptr, out msg.Position);
-            msg.Health = *(short*)ptr; ptr += 2;
-            int _lenTags = *(ushort*)ptr; ptr += 2;
+            ArpackGenerated.EnsureReadable(ptr, end, 8, "uint64");
+            msg.EntityID = ArpackGenerated.ReadU64LE(ptr); ptr += 8;
+            int _nPosition = Vector3.Deserialize(ptr, (int)(end - ptr), out msg.Position);
+            ptr += _nPosition;
+            ArpackGenerated.EnsureReadable(ptr, end, 2, "int16");
+            msg.Health = ArpackGenerated.ReadI16LE(ptr); ptr += 2;
+            ArpackGenerated.EnsureReadable(ptr, end, 2, "slice length for Tags");
+            int _lenTags = ArpackGenerated.ReadU16LE(ptr); ptr += 2;
             msg.Tags = new string[_lenTags];
             for (int _iTags = 0; _iTags < _lenTags; _iTags++)
             {
-                int _slenmsg_Tags__iTags_ = *(ushort*)ptr; ptr += 2;
+                ArpackGenerated.EnsureReadable(ptr, end, 2, "string length for Tags[_iTags]");
+                int _slenmsg_Tags__iTags_ = ArpackGenerated.ReadU16LE(ptr); ptr += 2;
+                ArpackGenerated.EnsureReadable(ptr, end, _slenmsg_Tags__iTags_, "string data for Tags[_iTags]");
                 msg.Tags[_iTags] = _slenmsg_Tags__iTags_ > 0 ? Encoding.UTF8.GetString(ptr, _slenmsg_Tags__iTags_) : string.Empty;
                 ptr += _slenmsg_Tags__iTags_;
             }
-            int _lenData = *(ushort*)ptr; ptr += 2;
+            ArpackGenerated.EnsureReadable(ptr, end, 2, "slice length for Data");
+            int _lenData = ArpackGenerated.ReadU16LE(ptr); ptr += 2;
             msg.Data = new byte[_lenData];
             for (int _iData = 0; _iData < _lenData; _iData++)
             {
+                ArpackGenerated.EnsureReadable(ptr, end, 1, "uint8");
                 msg.Data[_iData] = *ptr; ptr += 1;
             }
             return (int)(ptr - buffer);
@@ -209,19 +437,41 @@ namespace Arpack.Messages
         public Opcode Code;
         public byte Counter;
 
-        public int Serialize(byte* buffer)
+        public int Serialize(Span<byte> buffer)
+        {
+            fixed (byte* ptr = buffer)
+            {
+                return Serialize(ptr, buffer.Length);
+            }
+        }
+
+        public int Serialize(byte* buffer, int length)
         {
             byte* ptr = buffer;
-            *(ushort*)ptr = (ushort)Code; ptr += 2;
+            byte* end = buffer + length;
+            ArpackGenerated.EnsureWritable(ptr, end, 2, "uint16");
+            ArpackGenerated.WriteU16LE(ptr, (ushort)Code); ptr += 2;
+            ArpackGenerated.EnsureWritable(ptr, end, 1, "uint8");
             *ptr = Counter; ptr += 1;
             return (int)(ptr - buffer);
         }
 
-        public static int Deserialize(byte* buffer, out EnvelopeMessage msg)
+        public static int Deserialize(ReadOnlySpan<byte> data, out EnvelopeMessage msg)
+        {
+            fixed (byte* ptr = data)
+            {
+                return Deserialize(ptr, data.Length, out msg);
+            }
+        }
+
+        public static int Deserialize(byte* buffer, int length, out EnvelopeMessage msg)
         {
             byte* ptr = buffer;
+            byte* end = buffer + length;
             msg = default;
-            msg.Code = (Opcode)(*(ushort*)ptr); ptr += 2;
+            ArpackGenerated.EnsureReadable(ptr, end, 2, "uint16");
+            msg.Code = (Opcode)(ArpackGenerated.ReadU16LE(ptr)); ptr += 2;
+            ArpackGenerated.EnsureReadable(ptr, end, 1, "uint8");
             msg.Counter = *ptr; ptr += 1;
             return (int)(ptr - buffer);
         }

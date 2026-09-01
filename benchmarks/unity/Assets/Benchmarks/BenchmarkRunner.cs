@@ -41,7 +41,7 @@ public class BenchmarkRunner : MonoBehaviour
 
         byte[] apBuf = new byte[256];
         int apWireSize;
-        fixed (byte* ptr = apBuf) { apWireSize = apMsg.Serialize(ptr); }
+        fixed (byte* ptr = apBuf) { apWireSize = apMsg.Serialize(ptr, apBuf.Length); }
 
         byte[] apBytes = new byte[apWireSize];
         Array.Copy(apBuf, apBytes, apWireSize);
@@ -53,8 +53,8 @@ public class BenchmarkRunner : MonoBehaviour
         // Warmup (JIT)
         for (int i = 0; i < Warmup; i++)
         {
-            fixed (byte* ptr = apBuf) { apMsg.Serialize(ptr); }
-            fixed (byte* ptr = apBytes) { Arpack.Messages.MoveMessage.Deserialize(ptr, out _); }
+            fixed (byte* ptr = apBuf) { apMsg.Serialize(ptr, apBuf.Length); }
+            fixed (byte* ptr = apBytes) { Arpack.Messages.MoveMessage.Deserialize(ptr, apBytes.Length, out _); }
             _ = pbMsg.ToByteArray();
             _ = Benchproto.MoveMessage.Parser.ParseFrom(pbBytes);
             var cos = new CodedOutputStream(protoOutputBuf);
@@ -71,7 +71,7 @@ public class BenchmarkRunner : MonoBehaviour
         sw = Stopwatch.StartNew();
         for (int i = 0; i < N; i++)
         {
-            fixed (byte* ptr = apBuf) { apMsg.Serialize(ptr); }
+            fixed (byte* ptr = apBuf) { apMsg.Serialize(ptr, apBuf.Length); }
         }
         sw.Stop();
         gcAfter = GC.GetTotalMemory(false);
@@ -83,7 +83,7 @@ public class BenchmarkRunner : MonoBehaviour
         sw = Stopwatch.StartNew();
         for (int i = 0; i < N; i++)
         {
-            fixed (byte* ptr = apBytes) { Arpack.Messages.MoveMessage.Deserialize(ptr, out _); }
+            fixed (byte* ptr = apBytes) { Arpack.Messages.MoveMessage.Deserialize(ptr, apBytes.Length, out _); }
         }
         sw.Stop();
         gcAfter = GC.GetTotalMemory(false);

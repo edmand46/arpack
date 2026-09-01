@@ -14,8 +14,7 @@ func TestGenerateTypeScript_Primitives(t *testing.T) {
 	schema := parser.Schema{
 		Messages: []parser.Message{
 			{
-				PackageName: "test",
-				Name:        "PrimitiveMessage",
+				Name: "PrimitiveMessage",
 				Fields: []parser.Field{
 					{Name: "F32", Kind: parser.KindPrimitive, Primitive: parser.KindFloat32},
 					{Name: "F64", Kind: parser.KindPrimitive, Primitive: parser.KindFloat64},
@@ -79,8 +78,7 @@ func TestGenerateTypeScript_QuantizedFloats(t *testing.T) {
 	schema := parser.Schema{
 		Messages: []parser.Message{
 			{
-				PackageName: "test",
-				Name:        "QuantMessage",
+				Name: "QuantMessage",
 				Fields: []parser.Field{
 					{
 						Name:      "Q8",
@@ -134,8 +132,7 @@ func TestGenerateTypeScript_BoolPacking(t *testing.T) {
 	schema := parser.Schema{
 		Messages: []parser.Message{
 			{
-				PackageName: "test",
-				Name:        "BoolMessage",
+				Name: "BoolMessage",
 				Fields: []parser.Field{
 					{Name: "A", Kind: parser.KindPrimitive, Primitive: parser.KindBool},
 					{Name: "B", Kind: parser.KindPrimitive, Primitive: parser.KindBool},
@@ -184,15 +181,13 @@ func TestGenerateTypeScript_NestedTypes(t *testing.T) {
 	schema := parser.Schema{
 		Messages: []parser.Message{
 			{
-				PackageName: "test",
-				Name:        "Inner",
+				Name: "Inner",
 				Fields: []parser.Field{
 					{Name: "Value", Kind: parser.KindPrimitive, Primitive: parser.KindInt32},
 				},
 			},
 			{
-				PackageName: "test",
-				Name:        "Outer",
+				Name: "Outer",
 				Fields: []parser.Field{
 					{Name: "Inner", Kind: parser.KindNested, TypeName: "Inner"},
 				},
@@ -227,8 +222,7 @@ func TestGenerateTypeScript_FixedArrays(t *testing.T) {
 	schema := parser.Schema{
 		Messages: []parser.Message{
 			{
-				PackageName: "test",
-				Name:        "ArrayMessage",
+				Name: "ArrayMessage",
 				Fields: []parser.Field{
 					{
 						Name:     "Values",
@@ -271,8 +265,7 @@ func TestGenerateTypeScript_Slices(t *testing.T) {
 	schema := parser.Schema{
 		Messages: []parser.Message{
 			{
-				PackageName: "test",
-				Name:        "SliceMessage",
+				Name: "SliceMessage",
 				Fields: []parser.Field{
 					{
 						Name: "Items",
@@ -333,8 +326,7 @@ func TestGenerateTypeScript_Enums(t *testing.T) {
 		},
 		Messages: []parser.Message{
 			{
-				PackageName: "test",
-				Name:        "EnumMessage",
+				Name: "EnumMessage",
 				Fields: []parser.Field{
 					{
 						Name:      "Status",
@@ -394,8 +386,7 @@ func TestGenerateTypeScript_RejectsUint64Enums(t *testing.T) {
 		},
 		Messages: []parser.Message{
 			{
-				PackageName: "test",
-				Name:        "EnumMessage",
+				Name: "EnumMessage",
 				Fields: []parser.Field{
 					{
 						Name:      "Wide",
@@ -421,8 +412,7 @@ func TestGenerateTypeScript_Strings(t *testing.T) {
 	schema := parser.Schema{
 		Messages: []parser.Message{
 			{
-				PackageName: "test",
-				Name:        "StringMessage",
+				Name: "StringMessage",
 				Fields: []parser.Field{
 					{Name: "Name", Kind: parser.KindPrimitive, Primitive: parser.KindString},
 				},
@@ -466,8 +456,7 @@ func TestGenerateTypeScript_LengthAndRangeHelpers(t *testing.T) {
 	schema := parser.Schema{
 		Messages: []parser.Message{
 			{
-				PackageName: "test",
-				Name:        "LengthAndQuant",
+				Name: "LengthAndQuant",
 				Fields: []parser.Field{
 					{Name: "Name", Kind: parser.KindPrimitive, Primitive: parser.KindString},
 					{
@@ -524,15 +513,13 @@ func TestGenerateTypeScript_RuntimeGuards(t *testing.T) {
 	schema := parser.Schema{
 		Messages: []parser.Message{
 			{
-				PackageName: "test",
-				Name:        "Inner",
+				Name: "Inner",
 				Fields: []parser.Field{
 					{Name: "Value", Kind: parser.KindPrimitive, Primitive: parser.KindInt32},
 				},
 			},
 			{
-				PackageName: "test",
-				Name:        "Holder",
+				Name: "Holder",
 				Fields: []parser.Field{
 					{
 						Name:     "Items",
@@ -546,8 +533,7 @@ func TestGenerateTypeScript_RuntimeGuards(t *testing.T) {
 				},
 			},
 			{
-				PackageName: "test",
-				Name:        "Guarded",
+				Name: "Guarded",
 				Fields: []parser.Field{
 					{Name: "Name", Kind: parser.KindPrimitive, Primitive: parser.KindString},
 					{

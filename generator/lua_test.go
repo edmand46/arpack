@@ -361,9 +361,9 @@ func TestToSnakeCase(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		result := toSnakeCase(tt.input)
+		result := ToSnakeCase(tt.input)
 		if result != tt.expected {
-			t.Errorf("toSnakeCase(%q) = %q, want %q", tt.input, result, tt.expected)
+			t.Errorf("ToSnakeCase(%q) = %q, want %q", tt.input, result, tt.expected)
 		}
 	}
 }

@@ -22,7 +22,7 @@ func GenerateCSharpSchema(schema parser.Schema, namespace string) ([]byte, error
 	b.WriteString("#pragma warning disable CS8500\n\n")
 
 	b.WriteString("using System;\n")
-	if needsTextEncoding(messages) {
+	if anyField(messages, isString) {
 		b.WriteString("using System.Text;\n")
 	}
 	b.WriteString("\n")
@@ -202,7 +202,7 @@ func GenerateCSharpSchema(schema parser.Schema, namespace string) ([]byte, error
 func writeCSharpEnum(b *strings.Builder, enum parser.Enum) {
 	fmt.Fprintf(b, "    public enum %s : %s\n    {\n", enum.Name, csharpEnumBaseType(enum))
 	for i, value := range enum.Values {
-		fmt.Fprintf(b, "        %s = %s", csharpEnumValueName(enum.Name, value.Name), value.Value)
+		fmt.Fprintf(b, "        %s = %s", value.Name, value.Value)
 		if i < len(enum.Values)-1 {
 			b.WriteString(",")
 		}
@@ -306,16 +306,8 @@ func writeCSharpSerializeField(b *strings.Builder, f parser.Field, indent string
 		fmt.Fprintf(b, "%sArpackGenerated.EnsureFixedArray(%s, %d, %q);\n", indent, f.Name, f.FixedLen, "fixed array for "+f.Name)
 		fmt.Fprintf(b, "%sfor (int %s = 0; %s < %d; %s++)\n%s{\n",
 			indent, iVar, iVar, f.FixedLen, iVar, indent)
-		elemField := parser.Field{
-			Name:      f.Name + "[" + iVar + "]",
-			Kind:      f.Elem.Kind,
-			Primitive: f.Elem.Primitive,
-			NamedType: f.Elem.NamedType,
-			Quant:     f.Elem.Quant,
-			TypeName:  f.Elem.TypeName,
-			Elem:      f.Elem.Elem,
-			FixedLen:  f.Elem.FixedLen,
-		}
+		elemField := *f.Elem
+		elemField.Name = f.Name + "[" + iVar + "]"
 		if err := writeCSharpSerializeField(b, elemField, indent+"    ", enumNames); err != nil {
 			return err
 		}
@@ -329,16 +321,8 @@ func writeCSharpSerializeField(b *strings.Builder, f parser.Field, indent string
 		iVar := "_i" + f.Name
 		fmt.Fprintf(b, "%s    for (int %s = 0; %s < %s.Length; %s++)\n%s    {\n",
 			indent, iVar, iVar, f.Name, iVar, indent)
-		elemField := parser.Field{
-			Name:      f.Name + "[" + iVar + "]",
-			Kind:      f.Elem.Kind,
-			Primitive: f.Elem.Primitive,
-			NamedType: f.Elem.NamedType,
-			Quant:     f.Elem.Quant,
-			TypeName:  f.Elem.TypeName,
-			Elem:      f.Elem.Elem,
-			FixedLen:  f.Elem.FixedLen,
-		}
+		elemField := *f.Elem
+		elemField.Name = f.Name + "[" + iVar + "]"
 		if err := writeCSharpSerializeField(b, elemField, indent+"        ", enumNames); err != nil {
 			return err
 		}
@@ -445,16 +429,8 @@ func writeCSharpDeserializeField(
 		fmt.Fprintf(b, "%s%s = new %s[%d];\n", indent, access, csharpTypeName(*f.Elem, enumNames), f.FixedLen)
 		fmt.Fprintf(b, "%sfor (int %s = 0; %s < %d; %s++)\n%s{\n",
 			indent, iVar, iVar, f.FixedLen, iVar, indent)
-		elemField := parser.Field{
-			Name:      f.Name + "[" + iVar + "]",
-			Kind:      f.Elem.Kind,
-			Primitive: f.Elem.Primitive,
-			NamedType: f.Elem.NamedType,
-			Quant:     f.Elem.Quant,
-			TypeName:  f.Elem.TypeName,
-			Elem:      f.Elem.Elem,
-			FixedLen:  f.Elem.FixedLen,
-		}
+		elemField := *f.Elem
+		elemField.Name = f.Name + "[" + iVar + "]"
 		if err := writeCSharpDeserializeField(b, recv, elemField, indent+"    ", enumNames); err != nil {
 			return err
 		}
@@ -467,16 +443,8 @@ func writeCSharpDeserializeField(
 		iVar := "_i" + sanitizeVarName(f.Name)
 		fmt.Fprintf(b, "%sfor (int %s = 0; %s < %s; %s++)\n%s{\n",
 			indent, iVar, iVar, lenVar, iVar, indent)
-		elemField := parser.Field{
-			Name:      f.Name + "[" + iVar + "]",
-			Kind:      f.Elem.Kind,
-			Primitive: f.Elem.Primitive,
-			NamedType: f.Elem.NamedType,
-			Quant:     f.Elem.Quant,
-			TypeName:  f.Elem.TypeName,
-			Elem:      f.Elem.Elem,
-			FixedLen:  f.Elem.FixedLen,
-		}
+		elemField := *f.Elem
+		elemField.Name = f.Name + "[" + iVar + "]"
 		if err := writeCSharpDeserializeField(b, recv, elemField, indent+"    ", enumNames); err != nil {
 			return err
 		}
@@ -554,29 +522,6 @@ func writeCSharpDeserializeQuant(b *strings.Builder, access string, f parser.Fie
 	}
 	return nil
 }
-func needsTextEncoding(messages []parser.Message) bool {
-	for _, msg := range messages {
-		for _, f := range msg.Fields {
-			if fieldNeedsEncoding(f) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func fieldNeedsEncoding(f parser.Field) bool {
-	switch f.Kind {
-	case parser.KindPrimitive:
-		return f.Primitive == parser.KindString
-	case parser.KindFixedArray, parser.KindSlice:
-		if f.Elem != nil {
-			return fieldNeedsEncoding(*f.Elem)
-		}
-	}
-	return false
-}
-
 func csharpTypeName(f parser.Field, enumNames map[string]struct{}) string {
 	switch f.Kind {
 	case parser.KindPrimitive:
@@ -619,8 +564,4 @@ func csharpIsEnumType(f parser.Field, enumNames map[string]struct{}) bool {
 func csharpEnumBaseType(enum parser.Enum) string {
 	field := parser.Field{Primitive: enum.Primitive}
 	return field.CSharpPrimitiveTypeName()
-}
-
-func csharpEnumValueName(enumName, valueName string) string {
-	return valueName
 }

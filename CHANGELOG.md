@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.1.0] - 2026-09-02
 
 ### Changed
 
@@ -20,9 +20,20 @@
 - **TS/Lua nested struct variable naming**: Fixed invalid TypeScript destructuring identifiers and Lua variable names when nested structs appear inside fixed arrays (e.g., `[3]NestedStruct`).
 - **C# enum value names**: enum-type-prefix stripping removed entirely — C# enum member names now always match the schema (and TypeScript) verbatim. Previously stripping could produce invalid identifiers (leading digits) or colliding members.
 - **Lua bounds checking**: `check_bounds` calls are now wired into all primitive deserialize paths for defense-in-depth.
+- **Go string decode**: generated code compares incoming bytes with the existing field value via `string(bytes)` directly; the `arpackStringEqualBytes` helper is no longer emitted. The Go compiler performs this comparison without allocating, so identical strings still reuse existing storage. Regenerate Go outputs.
+- **TypeScript slice serialization**: slices are serialized with an index loop instead of `for...of`; nested element temporaries are named per field. Wire format unchanged.
+- **Parser type resolution**: named type chains (`type A B; type B uint16`) and aliases are resolved through `go/types` instead of a hand-written fixpoint pass. Behavior is unchanged for previously accepted schemas.
+- **CLI output writes**: generated files are written with a plain `os.WriteFile`; the temp-file/backup/rollback machinery was removed. All targets are still generated in memory before any file is written, so a failing target never touches disk.
+- **Generator internals**: removed duplicated per-language code paths (~1000 lines): TypeScript `*Element` copies, repeated `Field` element copies, seven schema-walker pairs (now a single `anyField`), and no-op wrappers. Generated output is identical except for the two items above.
+- **Benchmarks**: README numbers refreshed (Go, Apple M3 Max, 5 runs); the Unity benchmark C# code is regenerated with the current API and `BenchmarkRunner.cs` uses the new `Serialize`/`Deserialize` signatures.
 
 ### Added
 
 - **Boundary-value e2e tests**: Added `QuantTestMessage` to test schemas and `TestE2E_QuantBoundaryValues` that verifies all four languages produce identical wire output for edge-case quantized values.
 - **Non-Go-pivot e2e tests**: Added `TestE2E_NonGoPivot` for C#↔TS, C#↔Lua, and TS↔Lua roundtrip tests.
 - **Truncated-input e2e tests**: Added `TestE2E_TruncatedInput` that verifies each language's deserializer errors on empty/truncated input rather than producing garbage or panicking.
+- **`generator.ToSnakeCase`**: exported and shared by the Lua generator and the CLI.
+
+### Removed
+
+- `parser.Message.PackageName` (use `parser.Schema.PackageName`) and `parser.Field.CSharpTypeName`.

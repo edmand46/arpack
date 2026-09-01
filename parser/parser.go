@@ -54,11 +54,14 @@ func ParseSchemaSource(src string) (Schema, error) {
 func parseASTFile(fset *token.FileSet, f *ast.File) (Schema, error) {
 	pkgName := f.Name.Name
 
+	info, err := typeCheckFile(fset, f)
+	if err != nil {
+		return Schema{}, err
+	}
+
 	knownStructs := map[string]bool{}
 	namedPrimitives := map[string]PrimitiveKind{}
 	unsupportedNamedPrimitives := map[string]string{}
-	unresolvedNamedPrimitives := map[string]string{}
-	var unresolvedOrder []string
 	var enumOrder []string
 
 	for _, decl := range f.Decls {
@@ -72,60 +75,28 @@ func parseASTFile(fset *token.FileSet, f *ast.File) (Schema, error) {
 			if !ok {
 				continue
 			}
-
-			switch t := typeSpec.Type.(type) {
-			case *ast.StructType:
-				knownStructs[typeSpec.Name.Name] = true
-			case *ast.Ident:
-				switch t.Name {
-				case "int", "uint", "uintptr":
-					unsupportedNamedPrimitives[typeSpec.Name.Name] = t.Name
-					continue
-				}
-				primKind, isPrimitive := goPrimitiveKind(t.Name)
-				if !isPrimitive {
-					unresolvedNamedPrimitives[typeSpec.Name.Name] = t.Name
-					unresolvedOrder = append(unresolvedOrder, typeSpec.Name.Name)
-					continue
-				}
-				namedPrimitives[typeSpec.Name.Name] = primKind
-				if IsIntegralPrimitive(primKind) {
-					enumOrder = append(enumOrder, typeSpec.Name.Name)
-				}
-			}
-		}
-	}
-
-	for changed := true; changed; {
-		changed = false
-		for _, name := range unresolvedOrder {
-			target, unresolved := unresolvedNamedPrimitives[name]
-			if !unresolved {
+			name := typeSpec.Name.Name
+			if _, ok := typeSpec.Type.(*ast.StructType); ok {
+				knownStructs[name] = true
 				continue
 			}
-			if primKind, ok := namedPrimitives[target]; ok {
+
+			basic, ok := info.Defs[typeSpec.Name].Type().Underlying().(*types.Basic)
+			if !ok {
+				continue
+			}
+			switch basic.Kind() {
+			case types.Int, types.Uint, types.Uintptr:
+				unsupportedNamedPrimitives[name] = basic.Name()
+				continue
+			}
+			if primKind, ok := goPrimitiveKind(basic.Name()); ok {
 				namedPrimitives[name] = primKind
 				if IsIntegralPrimitive(primKind) {
 					enumOrder = append(enumOrder, name)
 				}
-				delete(unresolvedNamedPrimitives, name)
-				changed = true
-				continue
-			}
-			if _, ok := unsupportedNamedPrimitives[name]; ok {
-				continue
-			}
-			if baseType, ok := unsupportedNamedPrimitives[target]; ok {
-				unsupportedNamedPrimitives[name] = baseType
-				delete(unresolvedNamedPrimitives, name)
-				changed = true
 			}
 		}
-	}
-
-	info, err := typeCheckFile(fset, f)
-	if err != nil {
-		return Schema{}, err
 	}
 
 	schema := Schema{PackageName: pkgName}
@@ -158,7 +129,6 @@ func parseASTFile(fset *token.FileSet, f *ast.File) (Schema, error) {
 				}
 
 				msg, err := parseStruct(
-					pkgName,
 					typeSpec.Name.Name,
 					structType,
 					knownStructs,
@@ -229,7 +199,6 @@ func parseConstDecls(genDecl *ast.GenDecl, info *types.Info, enumIndex map[strin
 }
 
 func parseStruct(
-	pkg string,
 	name string,
 	st *ast.StructType,
 	knownStructs map[string]bool,
@@ -237,7 +206,7 @@ func parseStruct(
 	unsupportedNamedPrimitives map[string]string,
 	info *types.Info,
 ) (Message, error) {
-	msg := Message{PackageName: pkg, Name: name}
+	msg := Message{Name: name}
 
 	for _, astField := range st.Fields.List {
 		if len(astField.Names) == 0 {
@@ -450,24 +419,15 @@ func parseQuantTag(tag string) (*QuantInfo, error) {
 }
 
 func parseArrayLen(expr ast.Expr, info *types.Info) (int, error) {
-	if tv, ok := info.Types[expr]; ok && tv.Value != nil {
-		n, ok := constant.Int64Val(tv.Value)
-		if !ok || n <= 0 || int64(int(n)) != n {
-			return 0, fmt.Errorf("array length must be a positive integer, got %q", tv.Value.String())
-		}
-		return int(n), nil
-	}
-
-	lit, ok := expr.(*ast.BasicLit)
-	if !ok {
+	tv, ok := info.Types[expr]
+	if !ok || tv.Value == nil {
 		return 0, fmt.Errorf("array length must be an integer constant")
 	}
-
-	n, err := strconv.Atoi(lit.Value)
-	if err != nil || n <= 0 {
-		return 0, fmt.Errorf("array length must be a positive integer, got %q", lit.Value)
+	n, ok := constant.Int64Val(tv.Value)
+	if !ok || n <= 0 || int64(int(n)) != n {
+		return 0, fmt.Errorf("array length must be a positive integer, got %q", tv.Value.String())
 	}
-	return n, nil
+	return int(n), nil
 }
 
 func goPrimitiveKind(name string) (PrimitiveKind, bool) {

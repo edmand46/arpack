@@ -13,7 +13,7 @@ func lengthContext(f parser.Field) string {
 			return "slice length for " + f.Name
 		}
 		return "slice length"
-	case f.Kind == parser.KindPrimitive && f.Primitive == parser.KindString:
+	case isString(f):
 		if f.Name != "" {
 			return "string length for " + f.Name
 		}
@@ -30,10 +30,19 @@ func quantContext(f parser.Field) string {
 	return "value"
 }
 
-func schemaNeedsLengthGuards(messages []parser.Message) bool {
+func hasField(f parser.Field, pred func(parser.Field) bool) bool {
+	for p := &f; p != nil; p = p.Elem {
+		if pred(*p) {
+			return true
+		}
+	}
+	return false
+}
+
+func anyField(messages []parser.Message, pred func(parser.Field) bool) bool {
 	for _, msg := range messages {
 		for _, f := range msg.Fields {
-			if fieldNeedsLengthGuard(f) {
+			if hasField(f, pred) {
 				return true
 			}
 		}
@@ -41,49 +50,18 @@ func schemaNeedsLengthGuards(messages []parser.Message) bool {
 	return false
 }
 
-func fieldNeedsLengthGuard(f parser.Field) bool {
-	switch f.Kind {
-	case parser.KindPrimitive:
-		return f.Primitive == parser.KindString
-	case parser.KindFixedArray, parser.KindSlice:
-		if f.Kind == parser.KindSlice {
-			return true
-		}
-		if f.Elem != nil {
-			return fieldNeedsLengthGuard(*f.Elem)
-		}
-	}
-	return false
+func isString(f parser.Field) bool {
+	return f.Kind == parser.KindPrimitive && f.Primitive == parser.KindString
+}
+
+func schemaNeedsLengthGuards(messages []parser.Message) bool {
+	return anyField(messages, func(f parser.Field) bool { return isString(f) || f.Kind == parser.KindSlice })
 }
 
 func schemaNeedsQuantRangeGuards(messages []parser.Message) bool {
-	for _, msg := range messages {
-		for _, f := range msg.Fields {
-			if fieldNeedsQuantRangeGuard(f) {
-				return true
-			}
-		}
-	}
-	return false
+	return anyField(messages, func(f parser.Field) bool { return f.Quant != nil })
 }
 
-func fieldNeedsQuantRangeGuard(f parser.Field) bool {
-	switch f.Kind {
-	case parser.KindPrimitive:
-		return f.Quant != nil
-	case parser.KindFixedArray, parser.KindSlice:
-		if f.Elem != nil {
-			return fieldNeedsQuantRangeGuard(*f.Elem)
-		}
-	}
-	return false
-}
-
-// quantizeExpr returns the arithmetic expression string that converts a float64 value
-// to its quantized integer, using float64 arithmetic and truncation toward zero.
-// lang: "go", "cs", "ts", or "lua".
-// valueExpr: source-level expression evaluating to the float64 value (e.g. "m.PosX").
-// The caller is responsible for the surrounding buffer write and variable assignment.
 func quantizeExpr(lang, valueExpr string, q *parser.QuantInfo, bits int) string {
 	var inner string
 	switch lang {
@@ -110,23 +88,16 @@ func quantizeExpr(lang, valueExpr string, q *parser.QuantInfo, bits int) string 
 	}
 }
 
-// dequantizeExpr returns the arithmetic expression string that reconstructs a float64
-// from a quantized wire value, using float64 arithmetic.
-// lang: "go", "cs", "ts", or "lua".
-// rawExpr: source-level expression for the raw wire integer (e.g. "data[offset]").
-// For float32 targets, the caller wraps the result in a float32 cast after dequant.
 func dequantizeExpr(lang, rawExpr string, q *parser.QuantInfo, primKind parser.PrimitiveKind) string {
 	var inner string
 	switch lang {
 	case "go":
-		// Cast rawExpr to float64 first to avoid integer division overflow
 		inner = fmt.Sprintf("(float64(%s) / %g) * (%g - (%g)) + (%g)", rawExpr, q.MaxUint(), q.Max, q.Min, q.Min)
 		if primKind == parser.KindFloat32 {
 			return fmt.Sprintf("float32(%s)", inner)
 		}
 		return inner
 	case "cs":
-		// Cast rawExpr to double first to avoid integer division
 		inner = fmt.Sprintf("((double)(%s) / %g) * (%g - (%g)) + (%g)", rawExpr, q.MaxUint(), q.Max, q.Min, q.Min)
 		if primKind == parser.KindFloat32 {
 			return fmt.Sprintf("(float)(%s)", inner)
@@ -142,32 +113,16 @@ func dequantizeExpr(lang, rawExpr string, q *parser.QuantInfo, primKind parser.P
 }
 
 func needsBinaryImport(messages []parser.Message) bool {
-	for _, msg := range messages {
-		for _, f := range msg.Fields {
-			if fieldNeedsBinary(f) {
-				return true
+	return anyField(messages, func(f parser.Field) bool {
+		switch f.Kind {
+		case parser.KindSlice:
+			return true
+		case parser.KindPrimitive:
+			if f.Quant != nil {
+				return f.Quant.Bits == 16
 			}
+			return f.Primitive != parser.KindBool && f.Primitive != parser.KindInt8 && f.Primitive != parser.KindUint8
 		}
-	}
-	return false
-}
-
-func fieldNeedsBinary(f parser.Field) bool {
-	switch f.Kind {
-	case parser.KindPrimitive:
-		// bool, int8, uint8, and 8-bit quant use append(); everything else needs binary
-		if f.Quant != nil {
-			return f.Quant.Bits == 16
-		}
-		return f.Primitive != parser.KindBool &&
-			f.Primitive != parser.KindInt8 &&
-			f.Primitive != parser.KindUint8
-	case parser.KindSlice:
-		return true // length prefix uses binary.LittleEndian.AppendUint16
-	case parser.KindFixedArray:
-		if f.Elem != nil {
-			return fieldNeedsBinary(*f.Elem)
-		}
-	}
-	return false
+		return false
+	})
 }

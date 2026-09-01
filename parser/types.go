@@ -1,5 +1,7 @@
 package parser
 
+import "strconv"
+
 type PrimitiveKind int
 
 const (
@@ -29,7 +31,7 @@ const (
 type QuantInfo struct {
 	Min  float64
 	Max  float64
-	Bits int // 8 or 16, default 16
+	Bits int
 }
 
 func (q *QuantInfo) MaxUint() float64 {
@@ -112,26 +114,9 @@ func (f *Field) GoTypeName() string {
 	case KindNested:
 		return f.TypeName
 	case KindFixedArray:
-		return "[" + itoa(f.FixedLen) + "]" + f.Elem.GoTypeName()
+		return "[" + strconv.Itoa(f.FixedLen) + "]" + f.Elem.GoTypeName()
 	case KindSlice:
 		return "[]" + f.Elem.GoTypeName()
-	}
-	return "unknown"
-}
-
-func (f *Field) CSharpTypeName() string {
-	switch f.Kind {
-	case KindPrimitive:
-		if f.NamedType != "" {
-			return f.NamedType
-		}
-		return primitiveCSharpName(f.Primitive)
-	case KindNested:
-		return f.TypeName
-	case KindFixedArray:
-		return f.Elem.CSharpTypeName() + "[]"
-	case KindSlice:
-		return f.Elem.CSharpTypeName() + "[]"
 	}
 	return "unknown"
 }
@@ -204,24 +189,9 @@ func (f *Field) CSharpPrimitiveTypeName() string {
 	return primitiveCSharpName(f.Primitive)
 }
 
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	buf := [20]byte{}
-	pos := len(buf)
-	for n > 0 {
-		pos--
-		buf[pos] = byte('0' + n%10)
-		n /= 10
-	}
-	return string(buf[pos:])
-}
-
 type Message struct {
-	PackageName string
-	Name        string
-	Fields      []Field
+	Name   string
+	Fields []Field
 }
 
 type EnumValue struct {
@@ -241,10 +211,6 @@ type Schema struct {
 	Enums       []Enum
 }
 
-// MinWireSize returns the minimum number of wire bytes the message can
-// occupy: variable-length fields count only their 2-byte length prefix, and
-// runs of consecutive bool fields are bit-packed (up to 8 per byte), matching
-// the layout the generators emit.
 func (m *Message) MinWireSize() int {
 	total := 0
 	i := 0
