@@ -30,14 +30,44 @@ func ParseSource(src string) ([]Message, error) {
 }
 
 func ParseSchemaFile(path string) (Schema, error) {
-	fset := token.NewFileSet()
+	return ParseSchemaFiles([]string{path})
+}
 
-	f, err := goparser.ParseFile(fset, path, nil, 0)
-	if err != nil {
-		return Schema{}, fmt.Errorf("parse %s: %w", path, err)
+func ParseSchemaFiles(paths []string) (Schema, error) {
+	if len(paths) == 0 {
+		return Schema{}, fmt.Errorf("no input files")
 	}
 
-	return parseASTFile(fset, f)
+	fset := token.NewFileSet()
+	var files []*ast.File
+	for _, path := range paths {
+		f, err := goparser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			return Schema{}, fmt.Errorf("parse %s: %w", path, err)
+		}
+		files = append(files, f)
+	}
+
+	var pkgOrder []string
+	filesByPkg := map[string][]*ast.File{}
+	for _, f := range files {
+		pkg := f.Name.Name
+		if _, seen := filesByPkg[pkg]; !seen {
+			pkgOrder = append(pkgOrder, pkg)
+		}
+		filesByPkg[pkg] = append(filesByPkg[pkg], f)
+	}
+
+	groups := make([]Schema, 0, len(pkgOrder))
+	for _, pkg := range pkgOrder {
+		schema, err := parseASTFiles(fset, pkg, filesByPkg[pkg])
+		if err != nil {
+			return Schema{}, err
+		}
+		groups = append(groups, schema)
+	}
+
+	return mergeSchemas(pkgOrder, groups)
 }
 
 func ParseSchemaSource(src string) (Schema, error) {
@@ -48,13 +78,11 @@ func ParseSchemaSource(src string) (Schema, error) {
 		return Schema{}, fmt.Errorf("parse source: %w", err)
 	}
 
-	return parseASTFile(fset, f)
+	return parseASTFiles(fset, f.Name.Name, []*ast.File{f})
 }
 
-func parseASTFile(fset *token.FileSet, f *ast.File) (Schema, error) {
-	pkgName := f.Name.Name
-
-	info, err := typeCheckFile(fset, f)
+func parseASTFiles(fset *token.FileSet, pkgName string, files []*ast.File) (Schema, error) {
+	info, err := typeCheckFiles(fset, pkgName, files)
 	if err != nil {
 		return Schema{}, err
 	}
@@ -64,36 +92,36 @@ func parseASTFile(fset *token.FileSet, f *ast.File) (Schema, error) {
 	unsupportedNamedPrimitives := map[string]string{}
 	var enumOrder []string
 
-	for _, decl := range f.Decls {
-		genDecl, ok := decl.(*ast.GenDecl)
-		if !ok || genDecl.Tok != token.TYPE {
-			continue
-		}
-
-		for _, spec := range genDecl.Specs {
-			typeSpec, ok := spec.(*ast.TypeSpec)
-			if !ok {
+	for _, f := range files {
+		for _, decl := range f.Decls {
+			genDecl, ok := decl.(*ast.GenDecl)
+			if !ok || genDecl.Tok != token.TYPE {
 				continue
 			}
-			name := typeSpec.Name.Name
-			if _, ok := typeSpec.Type.(*ast.StructType); ok {
-				knownStructs[name] = true
-				continue
-			}
-
-			basic, ok := info.Defs[typeSpec.Name].Type().Underlying().(*types.Basic)
-			if !ok {
-				continue
-			}
-			switch basic.Kind() {
-			case types.Int, types.Uint, types.Uintptr:
-				unsupportedNamedPrimitives[name] = basic.Name()
-				continue
-			}
-			if primKind, ok := goPrimitiveKind(basic.Name()); ok {
-				namedPrimitives[name] = primKind
-				if IsIntegralPrimitive(primKind) {
-					enumOrder = append(enumOrder, name)
+			for _, spec := range genDecl.Specs {
+				typeSpec, ok := spec.(*ast.TypeSpec)
+				if !ok {
+					continue
+				}
+				name := typeSpec.Name.Name
+				if _, ok := typeSpec.Type.(*ast.StructType); ok {
+					knownStructs[name] = true
+					continue
+				}
+				basic, ok := info.Defs[typeSpec.Name].Type().Underlying().(*types.Basic)
+				if !ok {
+					continue
+				}
+				switch basic.Kind() {
+				case types.Int, types.Uint, types.Uintptr:
+					unsupportedNamedPrimitives[name] = basic.Name()
+					continue
+				}
+				if primKind, ok := goPrimitiveKind(basic.Name()); ok {
+					namedPrimitives[name] = primKind
+					if IsIntegralPrimitive(primKind) {
+						enumOrder = append(enumOrder, name)
+					}
 				}
 			}
 		}
@@ -109,48 +137,74 @@ func parseASTFile(fset *token.FileSet, f *ast.File) (Schema, error) {
 		})
 	}
 
-	for _, decl := range f.Decls {
-		genDecl, ok := decl.(*ast.GenDecl)
-		if !ok {
-			continue
-		}
-
-		switch genDecl.Tok {
-		case token.TYPE:
-			for _, spec := range genDecl.Specs {
-				typeSpec, ok := spec.(*ast.TypeSpec)
-				if !ok {
-					continue
-				}
-
-				structType, ok := typeSpec.Type.(*ast.StructType)
-				if !ok {
-					continue
-				}
-
-				msg, err := parseStruct(
-					typeSpec.Name.Name,
-					structType,
-					knownStructs,
-					namedPrimitives,
-					unsupportedNamedPrimitives,
-					info,
-				)
-				if err != nil {
-					return Schema{}, fmt.Errorf("struct %s: %w", typeSpec.Name.Name, err)
-				}
-
-				schema.Messages = append(schema.Messages, msg)
+	for _, f := range files {
+		for _, decl := range f.Decls {
+			genDecl, ok := decl.(*ast.GenDecl)
+			if !ok {
+				continue
 			}
-		case token.CONST:
-			parseConstDecls(genDecl, info, enumIndex, &schema)
+
+			switch genDecl.Tok {
+			case token.TYPE:
+				for _, spec := range genDecl.Specs {
+					typeSpec, ok := spec.(*ast.TypeSpec)
+					if !ok {
+						continue
+					}
+
+					structType, ok := typeSpec.Type.(*ast.StructType)
+					if !ok {
+						continue
+					}
+
+					msg, err := parseStruct(
+						typeSpec.Name.Name,
+						structType,
+						knownStructs,
+						namedPrimitives,
+						unsupportedNamedPrimitives,
+						info,
+					)
+					if err != nil {
+						return Schema{}, fmt.Errorf("%s: struct %s: %w", fset.Position(typeSpec.Pos()).Filename, typeSpec.Name.Name, err)
+					}
+
+					schema.Messages = append(schema.Messages, msg)
+				}
+			case token.CONST:
+				parseConstDecls(genDecl, info, enumIndex, &schema)
+			}
 		}
 	}
 
 	return schema, nil
 }
 
-func typeCheckFile(fset *token.FileSet, f *ast.File) (*types.Info, error) {
+func mergeSchemas(pkgs []string, groups []Schema) (Schema, error) {
+	merged := Schema{PackageName: groups[0].PackageName}
+	seen := map[string]string{}
+
+	for i, g := range groups {
+		for _, e := range g.Enums {
+			if prev, ok := seen[e.Name]; ok {
+				return Schema{}, fmt.Errorf("enum %s is declared in both %s and %s", e.Name, prev, pkgs[i])
+			}
+			seen[e.Name] = pkgs[i]
+			merged.Enums = append(merged.Enums, e)
+		}
+		for _, m := range g.Messages {
+			if prev, ok := seen[m.Name]; ok {
+				return Schema{}, fmt.Errorf("message %s is declared in both %s and %s", m.Name, prev, pkgs[i])
+			}
+			seen[m.Name] = pkgs[i]
+			merged.Messages = append(merged.Messages, m)
+		}
+	}
+
+	return merged, nil
+}
+
+func typeCheckFiles(fset *token.FileSet, pkgName string, files []*ast.File) (*types.Info, error) {
 	info := &types.Info{
 		Defs:  make(map[*ast.Ident]types.Object),
 		Types: make(map[ast.Expr]types.TypeAndValue),
@@ -160,8 +214,8 @@ func typeCheckFile(fset *token.FileSet, f *ast.File) (*types.Info, error) {
 		Importer: importer.Default(),
 	}
 
-	if _, err := cfg.Check(f.Name.Name, fset, []*ast.File{f}, info); err != nil {
-		return nil, fmt.Errorf("typecheck %s: %w", f.Name.Name, err)
+	if _, err := cfg.Check(pkgName, fset, files, info); err != nil {
+		return nil, fmt.Errorf("typecheck %s: %w", pkgName, err)
 	}
 
 	return info, nil

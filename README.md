@@ -8,7 +8,7 @@
 ![GitHub Tag](https://img.shields.io/github/v/tag/edmand46/arpack)
 ![GitHub License](https://img.shields.io/github/license/edmand46/arpack)
 
-Binary serialization code generator for Go, C#, TypeScript, and Lua.
+Binary serialization code generator for Go, C#, TypeScript, Lua, and GameMaker (2.3+).
 
 Define wire messages as Go structs, then generate compact little-endian serializers for every target. ArPack is intentionally narrow: it is built for owned protocols where predictable layout, cross-language compatibility, and low runtime overhead matter more than schema evolution features.
 
@@ -26,30 +26,46 @@ arpack \
   -out-go messages \
   -out-cs client/Messages \
   -out-ts web/src/messages \
-  -out-lua defold/scripts/messages
+  -out-lua defold/scripts/messages \
+  -out-gml GameMaker/scripts/src_arpack
 ```
 
 | Flag | Purpose |
 | --- | --- |
-| `-in` | Input Go schema file |
+| `-in` | Input Go schema file, repeatable |
+| `-name` | Base name for generated output files; defaults to the first `-in` file's name |
 | `-out-go` | Generated Go methods, co-located with the schema package |
 | `-out-cs` | Generated C# files |
 | `-out-ts` | Generated TypeScript files |
 | `-out-lua` | Generated Lua files |
+| `-out-gml` | Generated GameMaker Language (GML) files |
 | `-cs-namespace` | C# namespace, default `Arpack.Messages` |
 
 Output names:
 
-| Target | File |
-| --- | --- |
-| Go | `{name}_gen.go` |
-| C# | `{Name}.gen.cs` |
-| TypeScript | `{Name}.gen.ts` |
-| Lua | `{name}_gen.lua` |
+| Target | File                     |
+| --- |--------------------------|
+| Go | `{name}_gen.go`          |
+| C# | `{Name}.gen.cs`          |
+| TypeScript | `{Name}.gen.ts`          |
+| Lua | `{name}_gen.lua`         |
+| GML | `{folder}/{folder}.gml`  |
 
 ## Schema
 
-Schemas are single Go files. Message structs, nested message structs, enum types, and enum constants must be defined in that file.
+Schemas are Go files. Message structs, nested message structs, enum types, and enum constants must be defined in the schema files.
+
+Multiple `-in` files are merged into one output file per target. Files sharing a package name are type-checked together (cross-file references work within a package); different packages are parsed independently and merged. Type names must be unique across all inputs — e.g. system messages from a framework and game messages from your project:
+
+```bash
+arpack \
+  -in vendor/framework/messages.go \
+  -in game/messages.go \
+  -name messages \
+  -out-cs client/Messages
+```
+
+Cross-package type references (`framework.Vec3` in a game struct) are not supported; shared structs must live in one of the inputs.
 
 ```go
 package messages
@@ -139,6 +155,19 @@ Lua:
 local messages = require("messages.messages_gen")
 local data = messages.serialize_move_message(msg)
 local decoded, bytes_read = messages.deserialize_move_message(data)
+```
+
+GML:
+
+```gml
+var _msg = new MoveMessage();
+var _buf = _msg.serialize();                    // creates a buffer, seeked to start
+// _msg.serialize(_buf);                        // or append into an existing buffer
+
+buffer_seek(_buf, buffer_seek_start, 0);
+var _result = MoveMessage.deserialize(_buf);
+var _decoded = _result[0];                      // MoveMessage
+var _bytes = _result[1];                        // bytes consumed
 ```
 
 ## Benchmarks

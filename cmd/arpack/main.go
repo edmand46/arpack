@@ -14,12 +14,21 @@ import (
 	"github.com/edmand46/arpack/parser"
 )
 
+type multiFlag []string
+
+func (f *multiFlag) String() string { return strings.Join(*f, ",") }
+func (f *multiFlag) Set(v string) error {
+	*f = append(*f, v)
+	return nil
+}
+
 type genRequest struct {
-	in        string
+	name      string
 	outGo     string
 	outCS     string
 	outTS     string
 	outLua    string
+	outGML    string
 	namespace string
 }
 
@@ -30,36 +39,42 @@ type genFile struct {
 }
 
 func main() {
-	in := flag.String("in", "", "input Go file with struct definitions")
+	var ins multiFlag
+	name := flag.String("name", "", "base name for generated output files (defaults to the first -in file's name)")
 	outGo := flag.String("out-go", "", "output directory for generated Go code")
 	outCS := flag.String("out-cs", "", "output directory for generated C# code")
 	outTS := flag.String("out-ts", "", "output directory for generated TypeScript code")
 	outLua := flag.String("out-lua", "", "output directory for generated Lua code")
+	outGML := flag.String("out-gml", "", "output directory for generated GameMaker Language (GML) code")
 	namespace := flag.String("cs-namespace", "Arpack.Messages", "C# namespace")
+	flag.Var(&ins, "in", "input Go file with struct definitions (repeatable)")
 	flag.Parse()
 
-	if *in == "" {
+	if len(ins) == 0 {
 		log.Fatal("arpack: -in is required")
 	}
 
-	if *outGo == "" && *outCS == "" && *outTS == "" && *outLua == "" {
-		log.Fatal("arpack: at least one of -out-go, -out-cs, -out-ts, or -out-lua is required")
+	if *outGo == "" && *outCS == "" && *outTS == "" && *outLua == "" && *outGML == "" {
+		log.Fatal("arpack: at least one of -out-go, -out-cs, -out-ts, -out-lua, or -out-gml is required")
 	}
 
-	schema, err := parser.ParseSchemaFile(*in)
+	baseName := pickBaseName(*name, ins)
+
+	schema, err := parser.ParseSchemaFiles(ins)
 	if err != nil {
 		log.Fatalf("arpack: parse error: %v", err)
 	}
 	if len(schema.Messages) == 0 && len(schema.Enums) == 0 {
-		log.Fatalf("arpack: no structs or enums found in %s", *in)
+		log.Fatalf("arpack: no structs or enums found in %s", strings.Join(ins, ", "))
 	}
 
 	files, notices, err := buildOutputs(schema, genRequest{
-		in:        *in,
+		name:      baseName,
 		outGo:     *outGo,
 		outCS:     *outCS,
 		outTS:     *outTS,
 		outLua:    *outLua,
+		outGML:    *outGML,
 		namespace: *namespace,
 	})
 	for _, n := range notices {
@@ -81,7 +96,7 @@ func buildOutputs(schema parser.Schema, req genRequest) (files []genFile, notice
 	msgs := schema.Messages
 	schemaPkg := schema.PackageName
 
-	baseName := strings.TrimSuffix(filepath.Base(req.in), ".go")
+	baseName := req.name
 
 	if req.outGo != "" {
 		if len(msgs) == 0 {
@@ -135,6 +150,16 @@ func buildOutputs(schema parser.Schema, req genRequest) (files []genFile, notice
 		files = append(files, genFile{dir: req.outLua, path: filepath.Join(req.outLua, generator.ToSnakeCase(baseName)+"_gen.lua"), data: src})
 	}
 
+	if req.outGML != "" {
+		src, genErr := generator.GenerateGMLSchema(schema)
+		if genErr != nil {
+			return nil, notices, fmt.Errorf("generating GML: %w", genErr)
+		}
+
+		gmlName := filepath.Base(req.outGML)
+		files = append(files, genFile{dir: req.outGML, path: filepath.Join(req.outGML, gmlName+".gml"), data: src})
+	}
+
 	return files, notices, nil
 }
 
@@ -148,6 +173,13 @@ func writeOutputs(files []genFile) error {
 		}
 	}
 	return nil
+}
+
+func pickBaseName(nameFlag string, inputs []string) string {
+	if nameFlag != "" {
+		return nameFlag
+	}
+	return strings.TrimSuffix(filepath.Base(inputs[0]), ".go")
 }
 
 func toTitle(s string) string {

@@ -33,6 +33,8 @@
 - **Non-Go-pivot e2e tests**: Added `TestE2E_NonGoPivot` for C#↔TS, C#↔Lua, and TS↔Lua roundtrip tests.
 - **Truncated-input e2e tests**: Added `TestE2E_TruncatedInput` that verifies each language's deserializer errors on empty/truncated input rather than producing garbage or panicking.
 - **`generator.ToSnakeCase`**: exported and shared by the Lua generator and the CLI.
+- **GameMaker Language target**: `-out-gml` generates GML serializers (contributed in PR #1).
+- **Multiple schema inputs**: `-in` is repeatable and files may live in different packages; `-name` sets the output base name, defaulting to the first input file (PR #1, #2).
 
 ### Removed
 

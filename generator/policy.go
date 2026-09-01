@@ -83,6 +83,9 @@ func quantizeExpr(lang, valueExpr string, q *parser.QuantInfo, bits int) string 
 	case "lua":
 		inner = fmt.Sprintf("(%s - (%g)) / (%g - (%g)) * %g", valueExpr, q.Min, q.Max, q.Min, q.MaxUint())
 		return fmt.Sprintf("(math.modf(%s))", inner)
+	case "gml":
+		inner = fmt.Sprintf("(%s - (%g)) / (%g - (%g)) * %g", valueExpr, q.Min, q.Max, q.Min, q.MaxUint())
+		return fmt.Sprintf("(floor(%s))", inner)
 	default:
 		panic("unsupported language: " + lang)
 	}
@@ -105,7 +108,7 @@ func dequantizeExpr(lang, rawExpr string, q *parser.QuantInfo, primKind parser.P
 		return fmt.Sprintf("(double)(%s)", inner)
 	case "ts":
 		return fmt.Sprintf("(%s / %g) * (%g - (%g)) + (%g)", rawExpr, q.MaxUint(), q.Max, q.Min, q.Min)
-	case "lua":
+	case "lua", "gml":
 		return fmt.Sprintf("(%s / %g) * (%g - (%g)) + (%g)", rawExpr, q.MaxUint(), q.Max, q.Min, q.Min)
 	default:
 		panic("unsupported language: " + lang)

@@ -19,14 +19,14 @@ func writeSchema(t *testing.T, src string) string {
 	return path
 }
 
-func parseSchema(t *testing.T, src string) (parser.Schema, string) {
+func parseSchema(t *testing.T, src string) parser.Schema {
 	t.Helper()
 	path := writeSchema(t, src)
 	schema, err := parser.ParseSchemaFile(path)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	return schema, path
+	return schema
 }
 
 const structSchema = `package messages
@@ -54,10 +54,10 @@ type Big struct {
 `
 
 func TestBuildOutputs_AllTargets(t *testing.T) {
-	schema, in := parseSchema(t, structSchema)
+	schema := parseSchema(t, structSchema)
 	out := t.TempDir()
 	files, notices, err := buildOutputs(schema, genRequest{
-		in:        in,
+		name:      "messages",
 		outGo:     filepath.Join(out, "messages"),
 		outCS:     filepath.Join(out, "cs"),
 		outTS:     filepath.Join(out, "ts"),
@@ -84,10 +84,10 @@ func TestBuildOutputs_AllTargets(t *testing.T) {
 func TestBuildOutputs_FailingTargetProducesNoFiles(t *testing.T) {
 	// Lua rejects uint64; the Go/C#/TS targets would succeed, but a failing
 	// target must abort the whole run with zero files (all-or-nothing).
-	schema, in := parseSchema(t, luaUnsupportedSchema)
+	schema := parseSchema(t, luaUnsupportedSchema)
 	out := t.TempDir()
 	files, _, err := buildOutputs(schema, genRequest{
-		in:        in,
+		name:      "messages",
 		outGo:     filepath.Join(out, "messages"),
 		outCS:     filepath.Join(out, "cs"),
 		outTS:     filepath.Join(out, "ts"),
@@ -106,10 +106,10 @@ func TestBuildOutputs_FailingTargetProducesNoFiles(t *testing.T) {
 }
 
 func TestBuildOutputs_EnumOnlySkipsGo(t *testing.T) {
-	schema, in := parseSchema(t, enumOnlySchema)
+	schema := parseSchema(t, enumOnlySchema)
 	out := t.TempDir()
 	files, notices, err := buildOutputs(schema, genRequest{
-		in:        in,
+		name:      "messages",
 		outGo:     filepath.Join(out, "messages"),
 		outCS:     filepath.Join(out, "cs"),
 		namespace: "Arpack.Messages",
@@ -129,10 +129,10 @@ func TestBuildOutputs_EnumOnlySkipsGo(t *testing.T) {
 }
 
 func TestBuildOutputs_KeywordDirFallsBackToSchemaPackage(t *testing.T) {
-	schema, in := parseSchema(t, structSchema)
+	schema := parseSchema(t, structSchema)
 	out := t.TempDir()
 	files, notices, err := buildOutputs(schema, genRequest{
-		in:    in,
+		name:  "messages",
 		outGo: filepath.Join(out, "go"), // "go" is a Go keyword
 	})
 	if err != nil {
@@ -143,6 +143,76 @@ func TestBuildOutputs_KeywordDirFallsBackToSchemaPackage(t *testing.T) {
 	}
 	if !strings.Contains(string(files[0].data), "package messages") {
 		t.Fatalf("expected fallback to schema package, got:\n%s", files[0].data)
+	}
+}
+
+func TestPickBaseName(t *testing.T) {
+	base := pickBaseName("", []string{"/x/y/net_messages.go"})
+	if base != "net_messages" {
+		t.Fatalf("single input: got %q", base)
+	}
+	base = pickBaseName("custom", []string{"/x/y/a.go", "/x/y/b.go"})
+	if base != "custom" {
+		t.Fatalf("name flag: got %q", base)
+	}
+	base = pickBaseName("", []string{"/x/y/a.go", "/x/y/b.go"})
+	if base != "a" {
+		t.Fatalf("multiple inputs without -name: got %q, want first input base", base)
+	}
+}
+
+func TestBuildOutputs_MultiInputDifferentPackages(t *testing.T) {
+	dir := t.TempDir()
+	framework := filepath.Join(dir, "framework.go")
+	game := filepath.Join(dir, "game.go")
+	for path, src := range map[string]string{
+		framework: `package framework
+
+type Heartbeat struct {
+	Time uint32
+}
+`,
+		game: `package game
+
+type PlayerMove struct {
+	X float32
+	Y float32
+}
+`,
+	} {
+		if err := os.WriteFile(path, []byte(src), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	schema, err := parser.ParseSchemaFiles([]string{framework, game})
+	if err != nil {
+		t.Fatalf("ParseSchemaFiles: %v", err)
+	}
+
+	out := t.TempDir()
+	files, notices, err := buildOutputs(schema, genRequest{
+		name:      "all",
+		outGo:     filepath.Join(out, "messages"),
+		outCS:     filepath.Join(out, "cs"),
+		namespace: "Arpack.Messages",
+	})
+	if err != nil {
+		t.Fatalf("buildOutputs: %v", err)
+	}
+	if len(notices) != 0 {
+		t.Fatalf("unexpected notices: %v", notices)
+	}
+	if len(files) != 2 {
+		t.Fatalf("expected 2 files (one per target), got %d", len(files))
+	}
+	goData := string(files[0].data)
+	if !strings.Contains(goData, "Heartbeat") || !strings.Contains(goData, "PlayerMove") {
+		t.Fatalf("expected merged Go output with both messages, got:\n%s", goData)
+	}
+	csData := string(files[1].data)
+	if !strings.Contains(csData, "Heartbeat") || !strings.Contains(csData, "PlayerMove") {
+		t.Fatalf("expected merged C# output with both messages, got:\n%s", csData)
 	}
 }
 

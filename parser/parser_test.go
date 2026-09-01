@@ -1,6 +1,8 @@
 package parser
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -352,6 +354,141 @@ type Msg struct {
 	_, err := ParseSource(src)
 	if err == nil {
 		t.Fatal("expected error for unknown nested type, got nil")
+	}
+}
+
+type schemaFile struct {
+	name string
+	src  string
+}
+
+func writeSchemaFiles(t *testing.T, files []schemaFile) []string {
+	t.Helper()
+	dir := t.TempDir()
+	paths := make([]string, 0, len(files))
+	for _, f := range files {
+		p := filepath.Join(dir, f.name)
+		if err := os.WriteFile(p, []byte(f.src), 0644); err != nil {
+			t.Fatal(err)
+		}
+		paths = append(paths, p)
+	}
+	return paths
+}
+
+func TestParseSchemaFiles_SamePackageCrossFileRefs(t *testing.T) {
+	paths := writeSchemaFiles(t, []schemaFile{
+		{"common.go", `package messages
+
+type Vec3 struct {
+	X float32
+	Y float32
+	Z float32
+}
+`},
+		{"messages.go", `package messages
+
+type Move struct {
+	Dir Vec3
+}
+`},
+	})
+
+	schema, err := ParseSchemaFiles(paths)
+	if err != nil {
+		t.Fatalf("ParseSchemaFiles: %v", err)
+	}
+	if len(schema.Messages) != 2 || schema.Messages[0].Name != "Vec3" || schema.Messages[1].Name != "Move" {
+		t.Fatalf("expected Vec3 and Move from both files, got %+v", schema.Messages)
+	}
+	if f := schema.Messages[1].Fields[0]; f.Kind != KindNested || f.TypeName != "Vec3" {
+		t.Fatalf("expected nested Vec3 field, got %+v", f)
+	}
+}
+
+func TestParseSchemaFiles_DifferentPackagesMerged(t *testing.T) {
+	paths := writeSchemaFiles(t, []schemaFile{
+		{"framework.go", `package framework
+
+type Opcode uint16
+
+const (
+	OpcodePing Opcode = iota
+)
+
+type Heartbeat struct {
+	Time uint32
+}
+`},
+		{"game.go", `package game
+
+type PlayerMove struct {
+	X float32
+	Y float32
+}
+`},
+	})
+
+	schema, err := ParseSchemaFiles(paths)
+	if err != nil {
+		t.Fatalf("ParseSchemaFiles: %v", err)
+	}
+	if schema.PackageName != "framework" {
+		t.Fatalf("expected first package name %q, got %q", "framework", schema.PackageName)
+	}
+	if len(schema.Enums) != 1 || schema.Enums[0].Name != "Opcode" || len(schema.Enums[0].Values) != 1 {
+		t.Fatalf("expected merged enum with one value, got %+v", schema.Enums)
+	}
+	if len(schema.Messages) != 2 || schema.Messages[0].Name != "Heartbeat" || schema.Messages[1].Name != "PlayerMove" {
+		t.Fatalf("expected merged messages in file order, got %+v", schema.Messages)
+	}
+}
+
+func TestParseSchemaFiles_DuplicateTypeAcrossPackages(t *testing.T) {
+	paths := writeSchemaFiles(t, []schemaFile{
+		{"a.go", `package a
+
+type Ping struct {
+	ID uint32
+}
+`},
+		{"b.go", `package b
+
+type Ping struct {
+	ID uint32
+}
+`},
+	})
+
+	_, err := ParseSchemaFiles(paths)
+	if err == nil {
+		t.Fatal("expected duplicate type error, got nil")
+	}
+	if !strings.Contains(err.Error(), "Ping is declared in both") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestParseSchemaFiles_CrossPackageReferenceRejected(t *testing.T) {
+	paths := writeSchemaFiles(t, []schemaFile{
+		{"framework.go", `package framework
+
+type Vec3 struct {
+	X float32
+	Y float32
+	Z float32
+}
+`},
+		{"game.go", `package game
+
+type Move struct {
+	Dir framework.Vec3
+}
+`},
+	})
+
+	if _, err := ParseSchemaFiles(paths); err == nil {
+		t.Fatal("expected cross-package reference to fail, got nil")
 	}
 }
 
