@@ -594,7 +594,7 @@ type Msg struct {
 	Items [][]float64
 }
 `,
-			wantErr: "nested arrays/slices not supported",
+			wantErr: "nested arrays/slices/maps not supported",
 		},
 		{
 			name: "fixed array of slices",
@@ -603,7 +603,7 @@ type Msg struct {
 	Items [3][]int32
 }
 `,
-			wantErr: "nested arrays/slices not supported",
+			wantErr: "nested arrays/slices/maps not supported",
 		},
 	}
 	for _, tc := range cases {
@@ -633,5 +633,109 @@ type Foo struct {
 	}
 	if !strings.Contains(err.Error(), "embedded fields not supported") {
 		t.Fatalf("expected error containing 'embedded fields not supported', got %v", err)
+	}
+}
+
+func TestParse_Map(t *testing.T) {
+	src := `package p
+
+type Vector3 struct {
+	X float32
+}
+
+type Opcode uint16
+
+const (
+	OpcodeUnknown Opcode = iota
+)
+
+type Msg struct {
+	ByName map[string]int32
+	ByID   map[uint16]Vector3
+	ByOp   map[Opcode]string
+	ByI8   map[int8]float32 ` + "`" + `pack:"min=0,max=1,bits=8"` + "`" + `
+}
+`
+	schema, err := ParseSchemaSource(src)
+	if err != nil {
+		t.Fatalf("ParseSchemaSource: %v", err)
+	}
+	var msg *Message
+	for i := range schema.Messages {
+		if schema.Messages[i].Name == "Msg" {
+			msg = &schema.Messages[i]
+		}
+	}
+	if msg == nil {
+		t.Fatal("Msg not found")
+	}
+	want := []struct {
+		goType   string
+		keyPrim  PrimitiveKind
+		keyNamed string
+		elemKind FieldKind
+	}{
+		{"map[string]int32", KindString, "", KindPrimitive},
+		{"map[uint16]Vector3", KindUint16, "", KindNested},
+		{"map[Opcode]string", KindUint16, "Opcode", KindPrimitive},
+		{"map[int8]float32", KindInt8, "", KindPrimitive},
+	}
+	if len(msg.Fields) != len(want) {
+		t.Fatalf("expected %d fields, got %d", len(want), len(msg.Fields))
+	}
+	for i, w := range want {
+		f := msg.Fields[i]
+		if f.Kind != KindMap {
+			t.Fatalf("field %d: kind %v, want KindMap", i, f.Kind)
+		}
+		if got := f.GoTypeName(); got != w.goType {
+			t.Fatalf("field %d: GoTypeName %q, want %q", i, got, w.goType)
+		}
+		if f.WireSize() != -1 {
+			t.Fatalf("field %d: WireSize %d, want -1", i, f.WireSize())
+		}
+		if f.Key.Kind != KindPrimitive || f.Key.Primitive != w.keyPrim || f.Key.NamedType != w.keyNamed {
+			t.Fatalf("field %d: key %+v", i, *f.Key)
+		}
+		if f.Elem.Kind != w.elemKind {
+			t.Fatalf("field %d: elem kind %v, want %v", i, f.Elem.Kind, w.elemKind)
+		}
+	}
+	byI8 := msg.Fields[3]
+	if byI8.Elem.Quant == nil || byI8.Elem.Quant.Bits != 8 {
+		t.Fatalf("pack tag must apply to map value, got %+v", byI8.Elem.Quant)
+	}
+	if byI8.Key.Quant != nil {
+		t.Fatalf("pack tag must not apply to map key")
+	}
+}
+
+func TestParse_MapRejects(t *testing.T) {
+	cases := []struct {
+		name    string
+		field   string
+		wantErr string
+	}{
+		{"bool key", "map[bool]int32", "map key must be"},
+		{"float key", "map[float32]int32", "map key must be"},
+		{"struct key", "map[Vector3]int32", "map key must be"},
+		{"int key", "map[int]int32", "platform-dependent"},
+		{"slice value", "map[string][]int32", "nested arrays/slices/maps not supported"},
+		{"array value", "map[string][2]int32", "nested arrays/slices/maps not supported"},
+		{"map value", "map[string]map[string]int32", "nested arrays/slices/maps not supported"},
+		{"slice of maps", "[]map[string]int32", "nested arrays/slices/maps not supported"},
+		{"array of maps", "[2]map[string]int32", "nested arrays/slices/maps not supported"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			src := "package p\n\ntype Vector3 struct {\n\tX float32\n}\n\ntype Msg struct {\n\tF " + tc.field + "\n}\n"
+			_, err := ParseSource(src)
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("expected error containing %q, got %v", tc.wantErr, err)
+			}
+		})
 	}
 }

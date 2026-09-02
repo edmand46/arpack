@@ -104,15 +104,17 @@ Supported field shapes:
 | `float32`, `float64` | Optional `pack:"min=...,max=...,bits=8|16"` quantization |
 | `string` | UTF-8 bytes with `uint16` length prefix |
 | `[N]T`, `[]T` | Fixed arrays and `uint16`-length slices |
+| `map[K]V` | `uint16` entry count, then `(key, value)` pairs in ascending key order. Keys: `string`, explicit-width integers, enums. Values follow slice-element rules |
 | named structs and enums | Must be declared in the schema file |
 
-Unsupported: external package types, pointers, embedded fields, nested collections, and platform-dependent `int`, `uint`, or `uintptr`.
+Unsupported: external package types, pointers, embedded fields, nested collections (including maps of collections and collections of maps), `bool`/float/struct map keys, and platform-dependent `int`, `uint`, or `uintptr`.
 
 ## Runtime Contract
 
 - Wire format is little-endian.
 - Fields are encoded in declaration order.
-- Strings and slices use `uint16` length prefixes.
+- Strings, slices, and maps use `uint16` length prefixes.
+- Map entries are written in ascending key order: numeric for integers and enums, UTF-8 byte order for strings. Deserializers reject unsorted or duplicate keys.
 - Enum fields use their declared underlying integer type.
 - Quantized floats fail fast on `NaN` or out-of-range values.
 - Deserializers reject malformed or truncated input.
@@ -170,6 +172,8 @@ var _decoded = _result[0];                      // MoveMessage
 var _bytes = _result[1];                        // bytes consumed
 ```
 
+Map fields are `ds_map`s (created by the constructor and filled by `deserialize`); the caller owns them and must `ds_map_destroy` when done. Language mapping for maps: Go `map[K]V`, C# `Dictionary<K, V>`, TypeScript `Map<K, V>`, Lua table.
+
 ## Benchmarks
 
 Recent Go results on Apple M3 Max:
@@ -181,7 +185,13 @@ BenchmarkProto_Marshal-16                         179.9-182.7 ns/op    0 B/op   
 BenchmarkProto_Unmarshal-16                       236.3-245.0 ns/op  248 B/op    7 allocs/op
 BenchmarkFlatBuffers_Marshal-16                   143.4-144.0 ns/op    0 B/op    0 allocs/op
 BenchmarkFlatBuffers_Unmarshal-16                 35.64-35.87 ns/op   24 B/op    1 allocs/op
+BenchmarkArPack_MapMarshal-16                     332.1-349.4 ns/op  128 B/op    1 allocs/op
+BenchmarkArPack_MapUnmarshal-16                   272.8-278.2 ns/op   64 B/op    8 allocs/op
+BenchmarkProto_MapMarshal-16                      2469-2520 ns/op    960 B/op   56 allocs/op
+BenchmarkProto_MapUnmarshal-16                    1923-1966 ns/op   1376 B/op   57 allocs/op
 ```
+
+Map benchmarks serialize `ScoreboardMessage` (`map[string]int32` + `map[uint16]Vector3`, 8 entries each); protobuf runs with `Deterministic: true` so both sort keys, and the ArPack map unmarshal reuses the decoded message (`clear` + refill). FlatBuffers has no native map type.
 
 These results use a full-float sample schema for all formats. Marshal benchmarks reuse caller-owned buffers/builders where the library supports it. Unmarshal benchmarks materialize a fresh decoded message on each iteration. The FlatBuffers baseline is a hand-written encoding using the FlatBuffers Go runtime with inline `struct Vec3` values.
 

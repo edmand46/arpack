@@ -181,6 +181,58 @@ func (x *MoveMessage) GetName() string {
 	return ""
 }
 
+type ScoreboardMessage struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Scores        map[string]int32       `protobuf:"bytes,1,rep,name=scores,proto3" json:"scores,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"varint,2,opt,name=value"`
+	Positions     map[uint32]*Vector3    `protobuf:"bytes,2,rep,name=positions,proto3" json:"positions,omitempty" protobuf_key:"varint,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // proto has no uint16
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ScoreboardMessage) Reset() {
+	*x = ScoreboardMessage{}
+	mi := &file_benchmarks_proto_move_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ScoreboardMessage) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ScoreboardMessage) ProtoMessage() {}
+
+func (x *ScoreboardMessage) ProtoReflect() protoreflect.Message {
+	mi := &file_benchmarks_proto_move_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ScoreboardMessage.ProtoReflect.Descriptor instead.
+func (*ScoreboardMessage) Descriptor() ([]byte, []int) {
+	return file_benchmarks_proto_move_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *ScoreboardMessage) GetScores() map[string]int32 {
+	if x != nil {
+		return x.Scores
+	}
+	return nil
+}
+
+func (x *ScoreboardMessage) GetPositions() map[uint32]*Vector3 {
+	if x != nil {
+		return x.Positions
+	}
+	return nil
+}
+
 var File_benchmarks_proto_move_proto protoreflect.FileDescriptor
 
 const file_benchmarks_proto_move_proto_rawDesc = "" +
@@ -199,7 +251,16 @@ const file_benchmarks_proto_move_proto_rawDesc = "" +
 	"\x06active\x18\x05 \x01(\bR\x06active\x12\x18\n" +
 	"\avisible\x18\x06 \x01(\bR\avisible\x12\x14\n" +
 	"\x05ghost\x18\a \x01(\bR\x05ghost\x12\x12\n" +
-	"\x04name\x18\b \x01(\tR\x04nameB-Z+github.com/edmand46/arpack/benchmarks/protob\x06proto3"
+	"\x04name\x18\b \x01(\tR\x04name\"\xb0\x02\n" +
+	"\x11ScoreboardMessage\x12A\n" +
+	"\x06scores\x18\x01 \x03(\v2).benchproto.ScoreboardMessage.ScoresEntryR\x06scores\x12J\n" +
+	"\tpositions\x18\x02 \x03(\v2,.benchproto.ScoreboardMessage.PositionsEntryR\tpositions\x1a9\n" +
+	"\vScoresEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\x05R\x05value:\x028\x01\x1aQ\n" +
+	"\x0ePositionsEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\rR\x03key\x12)\n" +
+	"\x05value\x18\x02 \x01(\v2\x13.benchproto.Vector3R\x05value:\x028\x01B-Z+github.com/edmand46/arpack/benchmarks/protob\x06proto3"
 
 var (
 	file_benchmarks_proto_move_proto_rawDescOnce sync.Once
@@ -213,19 +274,25 @@ func file_benchmarks_proto_move_proto_rawDescGZIP() []byte {
 	return file_benchmarks_proto_move_proto_rawDescData
 }
 
-var file_benchmarks_proto_move_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
+var file_benchmarks_proto_move_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
 var file_benchmarks_proto_move_proto_goTypes = []any{
-	(*Vector3)(nil),     // 0: benchproto.Vector3
-	(*MoveMessage)(nil), // 1: benchproto.MoveMessage
+	(*Vector3)(nil),           // 0: benchproto.Vector3
+	(*MoveMessage)(nil),       // 1: benchproto.MoveMessage
+	(*ScoreboardMessage)(nil), // 2: benchproto.ScoreboardMessage
+	nil,                       // 3: benchproto.ScoreboardMessage.ScoresEntry
+	nil,                       // 4: benchproto.ScoreboardMessage.PositionsEntry
 }
 var file_benchmarks_proto_move_proto_depIdxs = []int32{
 	0, // 0: benchproto.MoveMessage.position:type_name -> benchproto.Vector3
 	0, // 1: benchproto.MoveMessage.waypoints:type_name -> benchproto.Vector3
-	2, // [2:2] is the sub-list for method output_type
-	2, // [2:2] is the sub-list for method input_type
-	2, // [2:2] is the sub-list for extension type_name
-	2, // [2:2] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	3, // 2: benchproto.ScoreboardMessage.scores:type_name -> benchproto.ScoreboardMessage.ScoresEntry
+	4, // 3: benchproto.ScoreboardMessage.positions:type_name -> benchproto.ScoreboardMessage.PositionsEntry
+	0, // 4: benchproto.ScoreboardMessage.PositionsEntry.value:type_name -> benchproto.Vector3
+	5, // [5:5] is the sub-list for method output_type
+	5, // [5:5] is the sub-list for method input_type
+	5, // [5:5] is the sub-list for extension type_name
+	5, // [5:5] is the sub-list for extension extendee
+	0, // [0:5] is the sub-list for field type_name
 }
 
 func init() { file_benchmarks_proto_move_proto_init() }
@@ -239,7 +306,7 @@ func file_benchmarks_proto_move_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_benchmarks_proto_move_proto_rawDesc), len(file_benchmarks_proto_move_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   2,
+			NumMessages:   5,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

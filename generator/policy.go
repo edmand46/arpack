@@ -13,6 +13,8 @@ func lengthContext(f parser.Field) string {
 			return "slice length for " + f.Name
 		}
 		return "slice length"
+	case f.Kind == parser.KindMap:
+		return "map length for " + f.Name
 	case isString(f):
 		if f.Name != "" {
 			return "string length for " + f.Name
@@ -31,12 +33,10 @@ func quantContext(f parser.Field) string {
 }
 
 func hasField(f parser.Field, pred func(parser.Field) bool) bool {
-	for p := &f; p != nil; p = p.Elem {
-		if pred(*p) {
-			return true
-		}
+	if pred(f) || (f.Key != nil && pred(*f.Key)) {
+		return true
 	}
-	return false
+	return f.Elem != nil && hasField(*f.Elem, pred)
 }
 
 func anyField(messages []parser.Message, pred func(parser.Field) bool) bool {
@@ -54,8 +54,18 @@ func isString(f parser.Field) bool {
 	return f.Kind == parser.KindPrimitive && f.Primitive == parser.KindString
 }
 
+func isMap(f parser.Field) bool {
+	return f.Kind == parser.KindMap
+}
+
+func isStringKeyMap(f parser.Field) bool {
+	return f.Kind == parser.KindMap && isString(*f.Key)
+}
+
 func schemaNeedsLengthGuards(messages []parser.Message) bool {
-	return anyField(messages, func(f parser.Field) bool { return isString(f) || f.Kind == parser.KindSlice })
+	return anyField(messages, func(f parser.Field) bool {
+		return isString(f) || f.Kind == parser.KindSlice || f.Kind == parser.KindMap
+	})
 }
 
 func schemaNeedsQuantRangeGuards(messages []parser.Message) bool {
@@ -118,7 +128,7 @@ func dequantizeExpr(lang, rawExpr string, q *parser.QuantInfo, primKind parser.P
 func needsBinaryImport(messages []parser.Message) bool {
 	return anyField(messages, func(f parser.Field) bool {
 		switch f.Kind {
-		case parser.KindSlice:
+		case parser.KindSlice, parser.KindMap:
 			return true
 		case parser.KindPrimitive:
 			if f.Quant != nil {

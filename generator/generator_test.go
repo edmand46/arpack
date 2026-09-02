@@ -1134,3 +1134,281 @@ func runGeneratedCSharpProgram(t *testing.T, generatedSrc []byte, programSrc str
 
 	return string(out)
 }
+
+const mapSchemaSource = `package messages
+
+type Vector3 struct {
+	X float32
+	Y float32
+	Z float32
+}
+
+type Opcode uint16
+
+const (
+	OpcodeUnknown Opcode = iota
+	OpcodeAuthorize
+	OpcodeJoinRoom
+)
+
+type MapMessage struct {
+	ByName map[string]int32
+	ByID   map[uint16]Vector3
+	ByOp   map[Opcode]string
+}
+`
+
+func TestGenerateGo_Map(t *testing.T) {
+	schema, err := parser.ParseSchemaSource(mapSchemaSource)
+	if err != nil {
+		t.Fatalf("ParseSchemaSource: %v", err)
+	}
+	src, err := GenerateGoSchema(schema, "messages")
+	if err != nil {
+		t.Fatalf("GenerateGoSchema: %v", err)
+	}
+	code := string(src)
+	for _, want := range []string{
+		"\t\"slices\"\n",
+		"slices.Sort(_keysByName)",
+		"m.ByName = make(map[string]int32, _lenByName)",
+		"clear(m.ByName)",
+		"arpack: map keys out of order for ByName",
+		"var _prevByOp Opcode",
+		"_n, _err := _v.Unmarshal(data[offset:])",
+	} {
+		if !strings.Contains(code, want) {
+			t.Fatalf("missing %q in:\n%s", want, code)
+		}
+	}
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "messages.go"), []byte(mapSchemaSource), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "messages_arpack.go"), src, 0644); err != nil {
+		t.Fatal(err)
+	}
+	runtimeTests := `package messages
+
+import (
+	"bytes"
+	"strings"
+	"testing"
+)
+
+func TestMapRoundTrip(t *testing.T) {
+	orig := MapMessage{
+		ByName: map[string]int32{"b": 2, "a": 1, "ab": 3},
+		ByID:   map[uint16]Vector3{2: {1, 2, 3}, 1: {-1, -2, -3}},
+		ByOp:   map[Opcode]string{OpcodeJoinRoom: "join", OpcodeAuthorize: "auth"},
+	}
+	buf := orig.Marshal(nil)
+	wantPrefix := []byte{3, 0, 1, 0, 'a', 1, 0, 0, 0, 2, 0, 'a', 'b', 3, 0, 0, 0, 1, 0, 'b', 2, 0, 0, 0, 2, 0, 1, 0}
+	if !bytes.HasPrefix(buf, wantPrefix) {
+		t.Fatalf("keys not written in sorted order: % x", buf)
+	}
+
+	got := MapMessage{ByName: map[string]int32{"stale": 9}}
+	n, err := got.Unmarshal(buf)
+	if err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if n != len(buf) {
+		t.Fatalf("consumed %d bytes, want %d", n, len(buf))
+	}
+	if len(got.ByName) != 3 || got.ByName["a"] != 1 || got.ByName["ab"] != 3 || got.ByName["b"] != 2 {
+		t.Fatalf("ByName = %v", got.ByName)
+	}
+	if _, ok := got.ByName["stale"]; ok {
+		t.Fatal("stale key survived Unmarshal into reused map")
+	}
+	if got.ByID[1] != (Vector3{-1, -2, -3}) || got.ByID[2] != (Vector3{1, 2, 3}) {
+		t.Fatalf("ByID = %v", got.ByID)
+	}
+	if got.ByOp[OpcodeJoinRoom] != "join" || got.ByOp[OpcodeAuthorize] != "auth" {
+		t.Fatalf("ByOp = %v", got.ByOp)
+	}
+	if _, err := got.Unmarshal(buf[:len(buf)-1]); err == nil {
+		t.Fatal("truncated Unmarshal returned nil error")
+	}
+	var empty MapMessage
+	if _, err := empty.Unmarshal(empty.Marshal(nil)); err != nil || len(empty.ByName) != 0 {
+		t.Fatalf("empty round trip: %v %v", err, empty)
+	}
+}
+
+func TestMapRejectsUnsortedKeys(t *testing.T) {
+	tail := []byte{0, 0, 0, 0} // empty ByID, ByOp
+	bad := map[string][]byte{
+		"unsorted":  append([]byte{2, 0, 1, 0, 'b', 1, 0, 0, 0, 1, 0, 'a', 2, 0, 0, 0}, tail...),
+		"duplicate": append([]byte{2, 0, 1, 0, 'a', 1, 0, 0, 0, 1, 0, 'a', 2, 0, 0, 0}, tail...),
+	}
+	for name, data := range bad {
+		var msg MapMessage
+		_, err := msg.Unmarshal(data)
+		if err == nil || !strings.Contains(err.Error(), "map keys out of order for ByName") {
+			t.Fatalf("%s: err = %v", name, err)
+		}
+	}
+	intUnsorted := []byte{0, 0, 2, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
+	var msg MapMessage
+	if _, err := msg.Unmarshal(intUnsorted); err == nil || !strings.Contains(err.Error(), "map keys out of order for ByID") {
+		t.Fatalf("int_unsorted: err = %v", err)
+	}
+	sorted := append([]byte{2, 0, 1, 0, 'a', 1, 0, 0, 0, 1, 0, 'b', 2, 0, 0, 0}, tail...)
+	if _, err := msg.Unmarshal(sorted); err != nil {
+		t.Fatalf("sorted: %v", err)
+	}
+}
+`
+	if err := os.WriteFile(filepath.Join(dir, "map_test.go"), []byte(runtimeTests), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module messages\n\ngo 1.21\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("go", "test", "./...")
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("go test failed:\n%s", out)
+	}
+}
+
+func TestGenerateCSharp_Map(t *testing.T) {
+	schema, err := parser.ParseSchemaSource(`package messages
+
+type MapMessage struct {
+	ByName map[string]int32
+	ByID   map[uint16]int32
+}
+`)
+	if err != nil {
+		t.Fatalf("ParseSchemaSource: %v", err)
+	}
+	src, err := GenerateCSharpSchema(schema, "Test.Messages")
+	if err != nil {
+		t.Fatalf("GenerateCSharpSchema: %v", err)
+	}
+	code := string(src)
+	for _, want := range []string{
+		"using System.Collections.Generic;",
+		"public Dictionary<string, int> ByName;",
+		"public Dictionary<ushort, int> ByID;",
+		"internal static int CompareBytes(byte[] a, byte[] b)",
+		"Array.Sort(_keysByName, (a, b) => ArpackGenerated.CompareBytes(a.Key, b.Key));",
+		"ByID.Keys.CopyTo(_keysByID, 0); Array.Sort(_keysByID);",
+		"SequenceCompareTo(new ReadOnlySpan<byte>(_prevByName, _prevByNameLen)) <= 0",
+		"arpack: map keys out of order for ByID",
+	} {
+		if !strings.Contains(code, want) {
+			t.Fatalf("missing %q in:\n%s", want, code)
+		}
+	}
+
+	if _, err := exec.LookPath("dotnet"); err != nil {
+		t.Skip("dotnet not found")
+	}
+	out := runGeneratedCSharpProgram(t, src, `using System;
+using System.Collections.Generic;
+using Test.Messages;
+
+unsafe class Program
+{
+    static void Emit(string label, Action action)
+    {
+        try
+        {
+            action();
+            Console.WriteLine(label + ":OK");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine(label + ":" + ex.GetType().Name + ":" + ex.Message);
+        }
+    }
+
+    static void Main()
+    {
+        Emit("ROUNDTRIP", () =>
+        {
+            var msg = new MapMessage
+            {
+                ByName = new Dictionary<string, int> { ["b"] = 2, ["a"] = 1, ["ab"] = 3 },
+                ByID = new Dictionary<ushort, int> { [2] = 20, [1] = 10 },
+            };
+            byte[] data = new byte[64];
+            int n = msg.Serialize(data);
+            byte[] want = { 3, 0, 1, 0, (byte)'a', 1, 0, 0, 0, 2, 0, (byte)'a', (byte)'b', 3, 0, 0, 0, 1, 0, (byte)'b', 2, 0, 0, 0, 2, 0, 1, 0, 10, 0, 0, 0, 2, 0, 20, 0, 0, 0 };
+            if (n != want.Length || !new ReadOnlySpan<byte>(data, 0, n).SequenceEqual(want))
+            {
+                throw new Exception("wire mismatch: " + Convert.ToHexString(data, 0, n));
+            }
+            int consumed = MapMessage.Deserialize(new ReadOnlySpan<byte>(data, 0, n), out MapMessage decoded);
+            if (consumed != n || decoded.ByName.Count != 3 || decoded.ByName["ab"] != 3 || decoded.ByID[1] != 10 || decoded.ByID[2] != 20)
+            {
+                throw new Exception("roundtrip mismatch");
+            }
+        });
+
+        Emit("ORDER", () =>
+        {
+            var msg = new MapMessage
+            {
+                ByName = new Dictionary<string, int> { ["\U0001F600"] = 5, ["！"] = 4 },
+                ByID = new Dictionary<ushort, int>(),
+            };
+            byte[] data = new byte[64];
+            int n = msg.Serialize(data);
+            if (data[4] != 0xEF)
+            {
+                throw new Exception("UTF-16 order leaked: " + Convert.ToHexString(data, 0, n));
+            }
+            MapMessage.Deserialize(new ReadOnlySpan<byte>(data, 0, n), out MapMessage decoded);
+            if (decoded.ByName["！"] != 4 || decoded.ByName["\U0001F600"] != 5)
+            {
+                throw new Exception("roundtrip mismatch");
+            }
+        });
+
+        Emit("UNSORTED", () =>
+        {
+            byte[] data = { 2, 0, 1, 0, (byte)'b', 1, 0, 0, 0, 1, 0, (byte)'a', 2, 0, 0, 0, 0, 0 };
+            MapMessage.Deserialize(data, out MapMessage _);
+        });
+
+        Emit("DUPLICATE", () =>
+        {
+            byte[] data = { 2, 0, 1, 0, (byte)'a', 1, 0, 0, 0, 1, 0, (byte)'a', 2, 0, 0, 0, 0, 0 };
+            MapMessage.Deserialize(data, out MapMessage _);
+        });
+
+        Emit("INT_UNSORTED", () =>
+        {
+            byte[] data = { 0, 0, 2, 0, 2, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0 };
+            MapMessage.Deserialize(data, out MapMessage _);
+        });
+    }
+}
+`)
+
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if len(lines) != 5 {
+		t.Fatalf("expected 5 output lines, got %d: %q", len(lines), out)
+	}
+	if lines[0] != "ROUNDTRIP:OK" {
+		t.Fatalf("roundtrip failed: %q", lines[0])
+	}
+	if lines[1] != "ORDER:OK" {
+		t.Fatalf("utf-8 key order failed: %q", lines[1])
+	}
+	for i, want := range []string{
+		"ArgumentException:arpack: map keys out of order for ByName",
+		"ArgumentException:arpack: map keys out of order for ByName",
+		"ArgumentException:arpack: map keys out of order for ByID",
+	} {
+		if !strings.Contains(lines[2+i], want) {
+			t.Fatalf("line %d: expected %q, got %q", 2+i, want, lines[2+i])
+		}
+	}
+}

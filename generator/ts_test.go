@@ -725,3 +725,118 @@ func runGeneratedTypeScriptProgram(t *testing.T, generatedSrc []byte, mainSrc st
 
 	return string(out)
 }
+
+func TestGenerateTypeScript_Map(t *testing.T) {
+	schema, err := parser.ParseSchemaSource(`package messages
+
+type MapMessage struct {
+	ByName map[string]int32
+	ByID   map[uint16]int32
+	ByBig  map[int64]int32
+}
+`)
+	if err != nil {
+		t.Fatalf("ParseSchemaSource: %v", err)
+	}
+	src, err := GenerateTypeScriptSchema(schema)
+	if err != nil {
+		t.Fatalf("GenerateTypeScriptSchema: %v", err)
+	}
+	code := string(src)
+	for _, want := range []string{
+		"byName: Map<string, number> = new Map();",
+		"byBig: Map<bigint, number> = new Map();",
+		"function arpackCompareBytes(a: Uint8Array, b: Uint8Array): number",
+		".sort((a, b) => arpackCompareBytes(a[0], b[0]));",
+		"Array.from(this.byBig.keys()).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));",
+		"let _prevByBig: bigint = 0n;",
+		"arpack: map keys out of order for ByName",
+	} {
+		if !strings.Contains(code, want) {
+			t.Fatalf("missing %q in:\n%s", want, code)
+		}
+	}
+
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("node not found")
+	}
+	if _, err := exec.LookPath("npm"); err != nil {
+		t.Skip("npm not found")
+	}
+
+	out := runGeneratedTypeScriptProgram(t, src, `
+import { MapMessage } from "./messages.gen";
+
+function emit(label: string, fn: () => void) {
+  try {
+    fn();
+    console.log(label + ":OK");
+  } catch (err) {
+    console.log(label + ":" + (err as Error).message);
+  }
+}
+
+function hex(data: Uint8Array): string {
+  return Array.from(data).map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+emit("ROUNDTRIP", () => {
+  const msg = new MapMessage();
+  msg.byName = new Map([["b", 2], ["a", 1], ["ab", 3]]);
+  msg.byID = new Map([[2, 20], [1, 10]]);
+  msg.byBig = new Map([[2n, 2], [-1n, -1], [10n, 10]]);
+  const buf = new Uint8Array(128);
+  const n = msg.serialize(buf);
+  const want = "0300" + "010061" + "01000000" + "02006162" + "03000000" + "010062" + "02000000"
+    + "0200" + "0100" + "0a000000" + "0200" + "14000000"
+    + "0300" + "ffffffffffffffff" + "ffffffff" + "0200000000000000" + "02000000" + "0a00000000000000" + "0a000000";
+  if (hex(buf.subarray(0, n)) !== want) throw new Error("wire mismatch: " + hex(buf.subarray(0, n)));
+  const [decoded, consumed] = MapMessage.deserialize(buf.subarray(0, n));
+  if (consumed !== n || decoded.byName.get("ab") !== 3 || decoded.byID.get(1) !== 10 || decoded.byBig.get(-1n) !== -1) throw new Error("roundtrip mismatch");
+  const bigKeys = Array.from(decoded.byBig.keys()).join(",");
+  if (bigKeys !== "-1,2,10") throw new Error("bigint order: " + bigKeys);
+});
+
+emit("ORDER", () => {
+  const msg = new MapMessage();
+  msg.byName = new Map([["\u{1F600}", 5], ["！", 4]]);
+  const buf = new Uint8Array(64);
+  const n = msg.serialize(buf);
+  if (buf[4] !== 0xef) throw new Error("UTF-16 order leaked: " + hex(buf.subarray(0, n)));
+  const [decoded] = MapMessage.deserialize(buf.subarray(0, n));
+  if (decoded.byName.get("！") !== 4 || decoded.byName.get("\u{1F600}") !== 5) throw new Error("roundtrip mismatch");
+});
+
+emit("UNSORTED", () => {
+  MapMessage.deserialize(new Uint8Array([2, 0, 1, 0, 0x62, 1, 0, 0, 0, 1, 0, 0x61, 2, 0, 0, 0, 0, 0, 0, 0]));
+});
+
+emit("DUPLICATE", () => {
+  MapMessage.deserialize(new Uint8Array([2, 0, 1, 0, 0x61, 1, 0, 0, 0, 1, 0, 0x61, 2, 0, 0, 0, 0, 0, 0, 0]));
+});
+
+emit("INT_UNSORTED", () => {
+  MapMessage.deserialize(new Uint8Array([0, 0, 2, 0, 2, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0]));
+});
+`)
+
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if len(lines) != 5 {
+		t.Fatalf("expected 5 output lines, got %d: %q", len(lines), out)
+	}
+	if lines[0] != "ROUNDTRIP:OK" {
+		t.Fatalf("roundtrip failed: %q", lines[0])
+	}
+	if lines[1] != "ORDER:OK" {
+		t.Fatalf("utf-8 key order failed: %q", lines[1])
+	}
+	for i, want := range []string{
+		"UNSORTED:arpack: map keys out of order for ByName",
+		"DUPLICATE:arpack: map keys out of order for ByName",
+		"INT_UNSORTED:arpack: map keys out of order for ByID",
+	} {
+		if lines[2+i] != want {
+			t.Fatalf("line %d: expected %q, got %q", 2+i, want, lines[2+i])
+		}
+	}
+}

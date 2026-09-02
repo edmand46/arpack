@@ -350,3 +350,60 @@ func TestGenerateGML_HelpersOnlyWhenNeeded(t *testing.T) {
 		t.Error("should not emit quant range guard without quantized fields")
 	}
 }
+
+func TestGenerateGML_Map(t *testing.T) {
+	schema, err := parser.ParseSchemaSource(`package messages
+
+type Vector3 struct {
+	X float32
+}
+
+type MapMessage struct {
+	ByName map[string]int32
+	ByID   map[uint16]Vector3
+}
+`)
+	if err != nil {
+		t.Fatalf("ParseSchemaSource: %v", err)
+	}
+	src, err := GenerateGMLSchema(schema)
+	if err != nil {
+		t.Fatalf("GenerateGMLSchema: %v", err)
+	}
+	code := string(src)
+	for _, want := range []string{
+		"function arpack_compare_string_bytes(_a, _b)",
+		"self.by_name = ds_map_create();",
+		"var _keysbyname = ds_map_keys_to_array(self.by_name);",
+		"array_sort(_keysbyname, arpack_compare_string_bytes);",
+		"array_sort(_keysbyid, true);",
+		`var _lenbyname = arpack_ensure_u16_length(array_length(_keysbyname), "map length for ByName");`,
+		"var _v = self.by_id[? _k];",
+		"_v.serialize(_buf);",
+		`if (_ibyname > 0 && arpack_compare_string_bytes(_k, _prevbyname) <= 0) show_error("arpack: map keys out of order for ByName", true);`,
+		`if (_ibyid > 0 && _k <= _prevbyid) show_error("arpack: map keys out of order for ByID", true);`,
+		"_v = Vector3.deserialize(_buf)[0];",
+		"ds_map_set(_msg.by_name, _k, _v);",
+	} {
+		if !strings.Contains(code, want) {
+			t.Fatalf("missing %q in:\n%s", want, code)
+		}
+	}
+
+	intOnly, err := parser.ParseSchemaSource(`package messages
+
+type M struct {
+	ByID map[uint16]int32
+}
+`)
+	if err != nil {
+		t.Fatalf("ParseSchemaSource: %v", err)
+	}
+	src2, err := GenerateGMLSchema(intOnly)
+	if err != nil {
+		t.Fatalf("GenerateGMLSchema: %v", err)
+	}
+	if strings.Contains(string(src2), "arpack_compare_string_bytes") {
+		t.Fatal("byte compare helper emitted without string-keyed maps")
+	}
+}

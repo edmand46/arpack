@@ -41,6 +41,7 @@ func TestE2E_CrossLanguage(t *testing.T) {
 		{"MoveMessage", "MoveMessage", 0.02},   // bool bit packing: Active, Visible, Ghost
 		{"EnvelopeMessage", "EnvelopeMessage", 0},
 		{"QuantTestMessage", "QuantTestMessage", 0.02},
+		{"MapMessage", "MapMessage", 0.02}, // sorted keys: string (UTF-8 byte order), uint16, enum
 	}
 
 	t.Run("CS", func(t *testing.T) {
@@ -148,6 +149,7 @@ func TestE2E_CrossLanguage(t *testing.T) {
 						{Name: "Counter", Kind: parser.KindPrimitive, Primitive: parser.KindUint8},
 					},
 				},
+				luaMapMessage,
 			},
 			Enums: []parser.Enum{
 				{
@@ -176,6 +178,7 @@ func TestE2E_CrossLanguage(t *testing.T) {
 			{"Vector3", "Vector3", 0.02},
 			{"MoveMessage", "MoveMessage", 0.02},
 			{"EnvelopeMessage", "EnvelopeMessage", 0},
+			{"MapMessage", "MapMessage", 0.02},
 		}
 
 		for _, tc := range luaCases {
@@ -374,6 +377,7 @@ func TestE2E_NonGoPivot(t *testing.T) {
 					{Name: "Code", Kind: parser.KindPrimitive, Primitive: parser.KindUint16},
 					{Name: "Counter", Kind: parser.KindPrimitive, Primitive: parser.KindUint8},
 				}},
+				luaMapMessage,
 			},
 			Enums: []parser.Enum{
 				{Name: "Opcode", Primitive: parser.KindUint16, Values: []parser.EnumValue{
@@ -396,7 +400,7 @@ func TestE2E_NonGoPivot(t *testing.T) {
 
 	// C# → TS and TS → C# roundtrip
 	if hasCS && hasTS {
-		for _, name := range []string{"Vector3", "EnvelopeMessage"} {
+		for _, name := range []string{"Vector3", "EnvelopeMessage", "MapMessage"} {
 			t.Run("CS_to_TS/"+name, func(t *testing.T) {
 				hex := runHarness(t, csDir, "cs", "ser", name, "")
 				out := runHarness(t, tsDir, "ts", "deser", name, hex)
@@ -412,7 +416,7 @@ func TestE2E_NonGoPivot(t *testing.T) {
 
 	// C# → Lua and Lua → C# roundtrip
 	if hasCS && hasLua {
-		for _, name := range []string{"Vector3", "EnvelopeMessage"} {
+		for _, name := range []string{"Vector3", "EnvelopeMessage", "MapMessage"} {
 			t.Run("CS_to_Lua/"+name, func(t *testing.T) {
 				hex := runHarness(t, csDir, "cs", "ser", name, "")
 				out := runHarness(t, luaDir, "lua", "deser", name, hex)
@@ -428,7 +432,7 @@ func TestE2E_NonGoPivot(t *testing.T) {
 
 	// TS → Lua and Lua → TS roundtrip
 	if hasTS && hasLua {
-		for _, name := range []string{"Vector3", "EnvelopeMessage"} {
+		for _, name := range []string{"Vector3", "EnvelopeMessage", "MapMessage"} {
 			t.Run("TS_to_Lua/"+name, func(t *testing.T) {
 				hex := runHarness(t, tsDir, "ts", "ser", name, "")
 				out := runHarness(t, luaDir, "lua", "deser", name, hex)
@@ -456,7 +460,7 @@ func TestE2E_TruncatedInput(t *testing.T) {
 	goDir := buildGoHarness(t, goSrc)
 
 	// All test types that provide deserialize in the harness
-	types := []string{"Vector3", "SpawnMessage", "MoveMessage", "EnvelopeMessage"}
+	types := []string{"Vector3", "SpawnMessage", "MoveMessage", "EnvelopeMessage", "MapMessage"}
 
 	t.Run("Go/truncated", func(t *testing.T) {
 		t.Run("Go/empty", func(t *testing.T) {
@@ -484,6 +488,12 @@ func TestE2E_TruncatedInput(t *testing.T) {
 				}
 			}
 		})
+
+		t.Run("Go/malformed_map", func(t *testing.T) {
+			checkMalformedMap(t, func(h string) *exec.Cmd {
+				return exec.Command(filepath.Join(goDir, "harness"), "deser", "MapMessage", h)
+			})
+		})
 	})
 	t.Run("CS", func(t *testing.T) {
 		if _, err := exec.LookPath("dotnet"); err != nil {
@@ -510,6 +520,12 @@ func TestE2E_TruncatedInput(t *testing.T) {
 					t.Errorf("%s: expected error for 1-byte input, got output: %s", typ, out)
 				}
 			}
+		})
+
+		t.Run("CS/malformed_map", func(t *testing.T) {
+			checkMalformedMap(t, func(h string) *exec.Cmd {
+				return exec.Command("dotnet", filepath.Join(csDir, "out", "E2EHarness.dll"), "deser", "MapMessage", h)
+			})
 		})
 	})
 	// TestE2E_TruncatedInput — TS block
@@ -542,6 +558,12 @@ func TestE2E_TruncatedInput(t *testing.T) {
 				}
 			}
 		})
+
+		t.Run("TS/malformed_map", func(t *testing.T) {
+			checkMalformedMap(t, func(h string) *exec.Cmd {
+				return exec.Command("node", filepath.Join(tsDir, "dist", "harness.js"), "deser", "MapMessage", h)
+			})
+		})
 	})
 	// TestE2E_TruncatedInput — Lua block
 
@@ -561,6 +583,7 @@ func TestE2E_TruncatedInput(t *testing.T) {
 					{Name: "Code", Kind: parser.KindPrimitive, Primitive: parser.KindUint16},
 					{Name: "Counter", Kind: parser.KindPrimitive, Primitive: parser.KindUint8},
 				}},
+				luaMapMessage,
 			},
 			Enums: []parser.Enum{
 				{Name: "Opcode", Primitive: parser.KindUint16, Values: []parser.EnumValue{
@@ -577,7 +600,7 @@ func TestE2E_TruncatedInput(t *testing.T) {
 		}
 		luaDir := buildLuaHarness(t, luaSrc)
 
-		luaTypes := []string{"Vector3", "EnvelopeMessage"}
+		luaTypes := []string{"Vector3", "EnvelopeMessage", "MapMessage"}
 
 		t.Run("Lua/empty", func(t *testing.T) {
 			for _, typ := range luaTypes {
@@ -596,7 +619,42 @@ func TestE2E_TruncatedInput(t *testing.T) {
 				}
 			}
 		})
+
+		t.Run("Lua/malformed_map", func(t *testing.T) {
+			checkMalformedMap(t, func(h string) *exec.Cmd {
+				cmd := exec.Command("luajit", filepath.Join(luaDir, "harness.lua"), "deser", "MapMessage", h)
+				cmd.Dir = luaDir
+				return cmd
+			})
+		})
 	})
+}
+
+// malformedMapCases are MapMessage payloads: ByName entries followed by empty ByID and ByOp.
+var malformedMapCases = []struct {
+	name    string
+	hex     string
+	wantErr bool
+}{
+	{"unsorted", "0200" + "010062" + "01000000" + "010061" + "02000000" + "0000" + "0000", true},
+	{"duplicate", "0200" + "010061" + "01000000" + "010061" + "02000000" + "0000" + "0000", true},
+	{"int_unsorted", "0000" + "0200" + "0200" + "ffffffffffff" + "0100" + "000000000000" + "0000", true},
+	{"sorted_ok", "0200" + "010061" + "01000000" + "010062" + "02000000" + "0000" + "0000", false},
+}
+
+func checkMalformedMap(t *testing.T, cmd func(hex string) *exec.Cmd) {
+	t.Helper()
+	for _, tc := range malformedMapCases {
+		out, err := cmd(tc.hex).CombinedOutput()
+		switch {
+		case tc.wantErr && err == nil:
+			t.Errorf("%s: expected map order error, got output: %s", tc.name, out)
+		case tc.wantErr && !bytes.Contains(out, []byte("map keys out of order")):
+			t.Errorf("%s: expected map order error, got: %s", tc.name, out)
+		case !tc.wantErr && err != nil:
+			t.Errorf("%s: expected success, got %v: %s", tc.name, err, out)
+		}
+	}
 }
 
 func verifyQuantValue(t *testing.T, kv map[string]string, key string, expected float64) {
@@ -615,6 +673,22 @@ func verifyQuantValue(t *testing.T, kv map[string]string, key string, expected f
 	if diff > epsilon {
 		t.Errorf("%s: expected %v, got %v (diff=%v)", key, expected, got, diff)
 	}
+}
+
+// luaMapMessage mirrors MapMessage from testdata/sample.go for the inline Lua schemas.
+var luaMapMessage = parser.Message{
+	Name: "MapMessage",
+	Fields: []parser.Field{
+		{Name: "ByName", Kind: parser.KindMap,
+			Key:  &parser.Field{Kind: parser.KindPrimitive, Primitive: parser.KindString},
+			Elem: &parser.Field{Kind: parser.KindPrimitive, Primitive: parser.KindInt32}},
+		{Name: "ByID", Kind: parser.KindMap,
+			Key:  &parser.Field{Kind: parser.KindPrimitive, Primitive: parser.KindUint16},
+			Elem: &parser.Field{Kind: parser.KindNested, TypeName: "Vector3"}},
+		{Name: "ByOp", Kind: parser.KindMap,
+			Key:  &parser.Field{Kind: parser.KindPrimitive, Primitive: parser.KindUint16, NamedType: "Opcode"},
+			Elem: &parser.Field{Kind: parser.KindPrimitive, Primitive: parser.KindString}},
+	},
 }
 
 func buildGoHarness(t *testing.T, generatedSrc []byte) string {
@@ -748,6 +822,19 @@ func checkOutput(t *testing.T, typ, output string, epsilon float64) {
 	case "EnvelopeMessage":
 		assertInt(t, kv, "Code", 2)
 		assertInt(t, kv, "Counter", 7)
+	case "MapMessage":
+		assertInt(t, kv, "ByName.len", 5)
+		assertInt(t, kv, "ByName[61]", 1)
+		assertInt(t, kv, "ByName[62]", 2)
+		assertInt(t, kv, "ByName[6162]", 3)
+		assertInt(t, kv, "ByName[efbc81]", 4)   // U+FF01
+		assertInt(t, kv, "ByName[f09f9880]", 5) // U+1F600
+		assertFloat(t, kv, "ByID[1].X", -1.0, epsilon)
+		assertFloat(t, kv, "ByID[1].Y", -2.0, epsilon)
+		assertFloat(t, kv, "ByID[1].Z", -3.0, epsilon)
+		assertFloat(t, kv, "ByID[2].X", 1.0, epsilon)
+		assertStr(t, kv, "ByOp[1]", "auth")
+		assertStr(t, kv, "ByOp[2]", "join")
 	case "QuantTestMessage":
 		assertFloat(t, kv, "DivergenceVal", -491.989, epsilon)
 		assertFloat(t, kv, "ZeroVal", 0.0, epsilon)
@@ -934,6 +1021,29 @@ func main() {
 		fmt.Printf("Code=%d\n", msg.Code)
 		fmt.Printf("Counter=%d\n", msg.Counter)
 
+	case "ser:MapMessage":
+		msg := MapMessage{
+			ByName: map[string]int32{"b": 2, "a": 1, "ab": 3, "！": 4, "😀": 5},
+			ByID:   map[uint16]Vector3{2: {X: 1, Y: 2, Z: 3}, 1: {X: -1, Y: -2, Z: -3}},
+			ByOp:   map[Opcode]string{OpcodeJoinRoom: "join", OpcodeAuthorize: "auth"},
+		}
+		fmt.Println(hex.EncodeToString(msg.Marshal(nil)))
+
+	case "deser:MapMessage":
+		data := mustDecodeHex(os.Args[3])
+		var msg MapMessage
+		mustUnmarshal(msg.Unmarshal(data))
+		fmt.Printf("ByName.len=%d\n", len(msg.ByName))
+		for k, v := range msg.ByName {
+			fmt.Printf("ByName[%s]=%d\n", hex.EncodeToString([]byte(k)), v)
+		}
+		for k, v := range msg.ByID {
+			fmt.Printf("ByID[%d].X=%v\nByID[%d].Y=%v\nByID[%d].Z=%v\n", k, v.X, k, v.Y, k, v.Z)
+		}
+		for k, v := range msg.ByOp {
+			fmt.Printf("ByOp[%d]=%s\n", k, v)
+		}
+
 	case "ser:QuantTestMessage":
 		msg := QuantTestMessage{
 			DivergenceVal: -491.989,
@@ -964,6 +1074,7 @@ func main() {
 `
 
 const csHarnessSource = `using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
 using Ragono.Messages;
@@ -1001,6 +1112,12 @@ unsafe class Program
             break;
         case "deser:EnvelopeMessage":
             DeserEnvelopeMessage(args[2]);
+            break;
+        case "ser:MapMessage":
+            SerMapMessage();
+            break;
+        case "deser:MapMessage":
+            DeserMapMessage(args[2]);
             break;
         case "ser:QuantTestMessage":
             SerQuantTestMessage();
@@ -1113,6 +1230,40 @@ unsafe class Program
         Console.WriteLine($"Counter={msg.Counter}");
     }
 
+    static unsafe void SerMapMessage()
+    {
+        var msg = new MapMessage
+        {
+            ByName = new Dictionary<string, int> { ["b"] = 2, ["a"] = 1, ["ab"] = 3, ["！"] = 4, ["\U0001F600"] = 5 },
+            ByID   = new Dictionary<ushort, Vector3>
+            {
+                [2] = new Vector3 { X = 1.0f, Y = 2.0f, Z = 3.0f },
+                [1] = new Vector3 { X = -1.0f, Y = -2.0f, Z = -3.0f },
+            },
+            ByOp   = new Dictionary<Opcode, string> { [Opcode.OpcodeJoinRoom] = "join", [Opcode.OpcodeAuthorize] = "auth" },
+        };
+        byte[] buf = new byte[512];
+        int n = msg.Serialize(buf);
+        Console.WriteLine(Convert.ToHexString(buf, 0, n).ToLower());
+    }
+
+    static unsafe void DeserMapMessage(string hexStr)
+    {
+        byte[] data = Convert.FromHexString(hexStr);
+        MapMessage.Deserialize(data, out MapMessage msg);
+        Console.WriteLine($"ByName.len={msg.ByName.Count}");
+        foreach (var kv in msg.ByName)
+            Console.WriteLine($"ByName[{Convert.ToHexString(Encoding.UTF8.GetBytes(kv.Key)).ToLower()}]={kv.Value}");
+        foreach (var kv in msg.ByID)
+        {
+            Console.WriteLine($"ByID[{kv.Key}].X={kv.Value.X:G9}");
+            Console.WriteLine($"ByID[{kv.Key}].Y={kv.Value.Y:G9}");
+            Console.WriteLine($"ByID[{kv.Key}].Z={kv.Value.Z:G9}");
+        }
+        foreach (var kv in msg.ByOp)
+            Console.WriteLine($"ByOp[{(ushort)kv.Key}]={kv.Value}");
+    }
+
     static unsafe void SerQuantTestMessage()
     {
         var msg = new QuantTestMessage
@@ -1189,7 +1340,7 @@ const tsConfigSource = `{
 const tsHarnessSource = `import { readFileSync } from 'fs';
 import { argv } from 'process';
 
-import { Vector3, MoveMessage, SpawnMessage, EnvelopeMessage, Opcode, QuantTestMessage } from './messages.gen.js';
+import { Vector3, MoveMessage, SpawnMessage, EnvelopeMessage, Opcode, QuantTestMessage, MapMessage } from './messages.gen.js';
 
 // Hex encoding/decoding utilities
 function encodeHex(data: Uint8Array): string {
@@ -1322,6 +1473,36 @@ function main() {
       break;
     }
 
+    case 'ser:MapMessage': {
+      const msg = new MapMessage();
+      msg.byName = new Map([['b', 2], ['a', 1], ['ab', 3], ['！', 4], ['\u{1F600}', 5]]);
+      const v1 = new Vector3();
+      v1.x = 1; v1.y = 2; v1.z = 3;
+      const v2 = new Vector3();
+      v2.x = -1; v2.y = -2; v2.z = -3;
+      msg.byID = new Map([[2, v1], [1, v2]]);
+      msg.byOp = new Map([[2 as Opcode, 'join'], [1 as Opcode, 'auth']]);
+      const buf = new Uint8Array(512);
+      const n = msg.serialize(buf);
+      console.log(encodeHex(buf.subarray(0, n)));
+      break;
+    }
+
+    case 'deser:MapMessage': {
+      const data = decodeHex(hexInput);
+      const [msg] = MapMessage.deserialize(data);
+      const enc = new TextEncoder();
+      console.log('ByName.len=' + msg.byName.size);
+      for (const [k, v] of msg.byName) console.log('ByName[' + encodeHex(enc.encode(k)) + ']=' + v);
+      for (const [k, v] of msg.byID) {
+        console.log('ByID[' + k + '].X=' + v.x.toPrecision(9));
+        console.log('ByID[' + k + '].Y=' + v.y.toPrecision(9));
+        console.log('ByID[' + k + '].Z=' + v.z.toPrecision(9));
+      }
+      for (const [k, v] of msg.byOp) console.log('ByOp[' + k + ']=' + v);
+      break;
+    }
+
     case 'ser:QuantTestMessage': {
       const msg = new QuantTestMessage();
       msg.divergenceVal = -491.989;
@@ -1445,6 +1626,37 @@ local function deserializeEnvelopeMessage(hex)
 end
 
 
+local function serializeMapMessage()
+    local msg = messages.new_map_message()
+    msg.by_name = { b = 2, a = 1, ab = 3, ["！"] = 4, ["😀"] = 5 }
+    local v1 = messages.new_vector3()
+    v1.x = 1.0; v1.y = 2.0; v1.z = 3.0
+    local v2 = messages.new_vector3()
+    v2.x = -1.0; v2.y = -2.0; v2.z = -3.0
+    msg.by_id = { [2] = v1, [1] = v2 }
+    msg.by_op = { [2] = "join", [1] = "auth" }
+    return bytesToHex(messages.serialize_map_message(msg))
+end
+
+local function deserializeMapMessage(hex)
+    local data = hexToBytes(hex)
+    local msg = messages.deserialize_map_message(data)
+    local n = 0
+    for _ in pairs(msg.by_name) do n = n + 1 end
+    print(string.format("ByName.len=%d", n))
+    for k, v in pairs(msg.by_name) do
+        print(string.format("ByName[%s]=%d", bytesToHex(k), v))
+    end
+    for k, v in pairs(msg.by_id) do
+        print(string.format("ByID[%d].X=%.10g", k, v.x))
+        print(string.format("ByID[%d].Y=%.10g", k, v.y))
+        print(string.format("ByID[%d].Z=%.10g", k, v.z))
+    end
+    for k, v in pairs(msg.by_op) do
+        print(string.format("ByOp[%d]=%s", k, v))
+    end
+end
+
 local function serializeQuantTestMessage()
     local msg = messages.new_quant_test_message()
     msg.divergence_val = -491.989
@@ -1485,6 +1697,10 @@ elseif key == "ser:EnvelopeMessage" then
     print(serializeEnvelopeMessage())
 elseif key == "deser:EnvelopeMessage" then
     deserializeEnvelopeMessage(hexInput)
+elseif key == "ser:MapMessage" then
+    print(serializeMapMessage())
+elseif key == "deser:MapMessage" then
+    deserializeMapMessage(hexInput)
 elseif key == "ser:QuantTestMessage" then
     print(serializeQuantTestMessage())
 elseif key == "deser:QuantTestMessage" then

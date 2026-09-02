@@ -54,6 +54,16 @@ func GenerateTypeScriptSchema(schema parser.Schema) ([]byte, error) {
 	b.WriteString("  }\n")
 	b.WriteString("}\n\n")
 
+	if anyField(messages, isStringKeyMap) {
+		b.WriteString("function arpackCompareBytes(a: Uint8Array, b: Uint8Array): number {\n")
+		b.WriteString("  const n = Math.min(a.length, b.length);\n")
+		b.WriteString("  for (let i = 0; i < n; i++) {\n")
+		b.WriteString("    if (a[i] !== b[i]) return a[i] - b[i];\n")
+		b.WriteString("  }\n")
+		b.WriteString("  return a.length - b.length;\n")
+		b.WriteString("}\n\n")
+	}
+
 	if needsQuantGuards {
 		b.WriteString("function arpackEnsureQuantizedRange(value: number, min: number, max: number, context: string): void {\n")
 		b.WriteString("  if (Number.isNaN(value) || value < min || value > max) {\n")
@@ -203,6 +213,49 @@ func writeTSSerializeField(b *strings.Builder, recv string, f parser.Field, inde
 			return err
 		}
 		fmt.Fprintf(b, "%s}\n", indent)
+	case parser.KindMap:
+		lenVar := "_len" + f.Name
+		keysVar := "_keys" + f.Name
+		iVar := "_i" + f.Name
+		keyField := *f.Key
+		keyField.Name = f.Name + " key"
+		body := indent + "  "
+		if isString(*f.Key) {
+			fmt.Fprintf(b, "%sconst %s = Array.from(%s, ([k, v]) => [arpackTextEncoder.encode(k), v] as const).sort((a, b) => arpackCompareBytes(a[0], b[0]));\n",
+				indent, keysVar, access)
+		} else {
+			fmt.Fprintf(b, "%sconst %s = Array.from(%s.keys()).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));\n", indent, keysVar, access)
+		}
+		fmt.Fprintf(b, "%sconst %s = arpackEnsureUint16Length(%s.length, %q);\n", indent, lenVar, keysVar, lengthContext(f))
+		fmt.Fprintf(b, "%sview.setUint16(pos, %s, true);\n", indent, lenVar)
+		fmt.Fprintf(b, "%spos += 2;\n", indent)
+		fmt.Fprintf(b, "%sfor (let %s = 0; %s < %s.length; %s++) {\n", indent, iVar, iVar, keysVar, iVar)
+		if isString(*f.Key) {
+			fmt.Fprintf(b, "%sconst _kb = %s[%s][0];\n", body, keysVar, iVar)
+			fmt.Fprintf(b, "%sarpackEnsureUint16Length(_kb.length, %q);\n", body, lengthContext(keyField))
+			fmt.Fprintf(b, "%sarpackEnsureWritable(view, pos, 2 + _kb.length, %q);\n", body, "string data for "+keyField.Name)
+			fmt.Fprintf(b, "%sview.setUint16(pos, _kb.length, true);\n", body)
+			fmt.Fprintf(b, "%spos += 2;\n", body)
+			fmt.Fprintf(b, "%snew Uint8Array(view.buffer, view.byteOffset+pos, _kb.length).set(_kb);\n", body)
+			fmt.Fprintf(b, "%spos += _kb.length;\n", body)
+			fmt.Fprintf(b, "%sconst _v = %s[%s][1];\n", body, keysVar, iVar)
+		} else {
+			fmt.Fprintf(b, "%sconst _k = %s[%s];\n", body, keysVar, iVar)
+			if err := writeTSSerializePrimitive(b, "_k", keyField, body, enumNames); err != nil {
+				return err
+			}
+			fmt.Fprintf(b, "%sconst _v = %s.get(_k)!;\n", body, access)
+		}
+		if f.Elem.Kind == parser.KindNested {
+			fmt.Fprintf(b, "%spos += _v.serialize(view, pos);\n", body)
+		} else {
+			valField := *f.Elem
+			valField.Name = f.Name + " value"
+			if err := writeTSSerializePrimitive(b, "_v", valField, body, enumNames); err != nil {
+				return err
+			}
+		}
+		fmt.Fprintf(b, "%s}\n", indent)
 	}
 	return nil
 }
@@ -313,6 +366,54 @@ func writeTSDeserializeField(b *strings.Builder, recv string, f parser.Field, in
 			return err
 		}
 		fmt.Fprintf(b, "%s}\n", indent)
+	case parser.KindMap:
+		lenVar := "_len" + f.Name
+		iVar := "_i" + f.Name
+		prevVar := "_prev" + f.Name
+		keyField := *f.Key
+		keyField.Name = f.Name + " key"
+		orderErr := fmt.Sprintf("throw new RangeError(%q);", "arpack: map keys out of order for "+f.Name)
+		body := indent + "  "
+		fmt.Fprintf(b, "%sarpackEnsureReadable(view, pos, 2, %q);\n", indent, lengthContext(f))
+		fmt.Fprintf(b, "%sconst %s = view.getUint16(pos, true);\n", indent, lenVar)
+		fmt.Fprintf(b, "%spos += 2;\n", indent)
+		fmt.Fprintf(b, "%s%s = new Map();\n", indent, access)
+		if isString(*f.Key) {
+			fmt.Fprintf(b, "%slet %s: Uint8Array = new Uint8Array(0);\n", indent, prevVar)
+			fmt.Fprintf(b, "%sfor (let %s = 0; %s < %s; %s++) {\n", indent, iVar, iVar, lenVar, iVar)
+			fmt.Fprintf(b, "%sarpackEnsureReadable(view, pos, 2, %q);\n", body, "string length for "+keyField.Name)
+			fmt.Fprintf(b, "%sconst _klen = view.getUint16(pos, true);\n", body)
+			fmt.Fprintf(b, "%spos += 2;\n", body)
+			fmt.Fprintf(b, "%sarpackEnsureReadable(view, pos, _klen, %q);\n", body, "string data for "+keyField.Name)
+			fmt.Fprintf(b, "%sconst _kb = new Uint8Array(view.buffer, view.byteOffset+pos, _klen);\n", body)
+			fmt.Fprintf(b, "%sif (%s > 0 && arpackCompareBytes(_kb, %s) <= 0) %s\n", body, iVar, prevVar, orderErr)
+			fmt.Fprintf(b, "%s%s = _kb;\n", body, prevVar)
+			fmt.Fprintf(b, "%sconst _k = arpackTextDecoder.decode(_kb);\n", body)
+			fmt.Fprintf(b, "%spos += _klen;\n", body)
+		} else {
+			fmt.Fprintf(b, "%slet %s: %s = %s;\n", indent, prevVar, tsTypeName(*f.Key, enumNames), tsDefaultValue(*f.Key, enumNames))
+			fmt.Fprintf(b, "%sfor (let %s = 0; %s < %s; %s++) {\n", indent, iVar, iVar, lenVar, iVar)
+			fmt.Fprintf(b, "%slet _k: %s;\n", body, tsTypeName(*f.Key, enumNames))
+			if err := writeTSDeserializePrimitive(b, "_k", keyField, body, enumNames); err != nil {
+				return err
+			}
+			fmt.Fprintf(b, "%sif (%s > 0 && _k <= %s) %s\n", body, iVar, prevVar, orderErr)
+			fmt.Fprintf(b, "%s%s = _k;\n", body, prevVar)
+		}
+		fmt.Fprintf(b, "%slet _v: %s;\n", body, tsTypeName(*f.Elem, enumNames))
+		if f.Elem.Kind == parser.KindNested {
+			fmt.Fprintf(b, "%sconst [_dv, _dn] = %s.deserialize(view, pos);\n", body, f.Elem.TypeName)
+			fmt.Fprintf(b, "%s_v = _dv;\n", body)
+			fmt.Fprintf(b, "%spos += _dn;\n", body)
+		} else {
+			valField := *f.Elem
+			valField.Name = f.Name + " value"
+			if err := writeTSDeserializePrimitive(b, "_v", valField, body, enumNames); err != nil {
+				return err
+			}
+		}
+		fmt.Fprintf(b, "%s%s.set(_k, _v);\n", body, access)
+		fmt.Fprintf(b, "%s}\n", indent)
 	}
 	return nil
 }
@@ -419,6 +520,8 @@ func tsTypeName(f parser.Field, enumNames map[string]struct{}) string {
 		return f.TypeName
 	case parser.KindFixedArray, parser.KindSlice:
 		return tsTypeName(*f.Elem, enumNames) + "[]"
+	case parser.KindMap:
+		return "Map<" + tsTypeName(*f.Key, enumNames) + ", " + tsTypeName(*f.Elem, enumNames) + ">"
 	}
 	return "unknown"
 }
@@ -467,6 +570,8 @@ func tsDefaultValue(f parser.Field, enumNames map[string]struct{}) string {
 		return fmt.Sprintf("new Array<%s>(%d).fill(%s)", elemType, f.FixedLen, elemDefault)
 	case parser.KindSlice:
 		return "[]"
+	case parser.KindMap:
+		return "new Map()"
 	}
 	return "undefined"
 }
@@ -475,7 +580,7 @@ func tsDefaultNeedsFactory(f parser.Field) bool {
 	switch f.Kind {
 	case parser.KindPrimitive:
 		return false
-	case parser.KindNested, parser.KindFixedArray, parser.KindSlice:
+	case parser.KindNested, parser.KindFixedArray, parser.KindSlice, parser.KindMap:
 		return true
 	}
 	return true

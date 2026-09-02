@@ -37,3 +37,9 @@ type EnvelopeMessage struct {
 	Code    Opcode
 	Counter uint8
 }
+
+type MapMessage struct {
+	ByName map[string]int32
+	ByID   map[uint16]Vector3
+	ByOp   map[Opcode]string
+}

@@ -18,3 +18,8 @@ message MoveMessage {
   bool ghost = 7;
   string name = 8;
 }
+
+message ScoreboardMessage {
+  map<string, int32> scores = 1;
+  map<uint32, Vector3> positions = 2; // proto has no uint16
+}

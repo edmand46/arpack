@@ -320,8 +320,8 @@ func parseFieldType(
 			if err != nil {
 				return Field{}, fmt.Errorf("slice element: %w", err)
 			}
-			if elem.Kind == KindSlice || elem.Kind == KindFixedArray {
-				return Field{}, fmt.Errorf("nested arrays/slices not supported (v1 limitation)")
+			if elem.Kind == KindSlice || elem.Kind == KindFixedArray || elem.Kind == KindMap {
+				return Field{}, fmt.Errorf("nested arrays/slices/maps not supported (v1 limitation)")
 			}
 			return Field{
 				Name: name,
@@ -339,14 +339,36 @@ func parseFieldType(
 		if err != nil {
 			return Field{}, fmt.Errorf("array element: %w", err)
 		}
-		if elem.Kind == KindSlice || elem.Kind == KindFixedArray {
-			return Field{}, fmt.Errorf("nested arrays/slices not supported (v1 limitation)")
+		if elem.Kind == KindSlice || elem.Kind == KindFixedArray || elem.Kind == KindMap {
+			return Field{}, fmt.Errorf("nested arrays/slices/maps not supported (v1 limitation)")
 		}
 		return Field{
 			Name:     name,
 			Kind:     KindFixedArray,
 			Elem:     &elem,
 			FixedLen: n,
+		}, nil
+
+	case *ast.MapType:
+		key, err := parseFieldType("", t.Key, "", knownStructs, namedPrimitives, unsupportedNamedPrimitives, info)
+		if err != nil {
+			return Field{}, fmt.Errorf("map key: %w", err)
+		}
+		if key.Kind != KindPrimitive || !(key.Primitive == KindString || IsIntegralPrimitive(key.Primitive)) {
+			return Field{}, fmt.Errorf("map key must be string, explicit-width integer, or enum, got %s", key.GoTypeName())
+		}
+		elem, err := parseFieldType("", t.Value, rawTag, knownStructs, namedPrimitives, unsupportedNamedPrimitives, info)
+		if err != nil {
+			return Field{}, fmt.Errorf("map value: %w", err)
+		}
+		if elem.Kind == KindSlice || elem.Kind == KindFixedArray || elem.Kind == KindMap {
+			return Field{}, fmt.Errorf("nested arrays/slices/maps not supported (v1 limitation)")
+		}
+		return Field{
+			Name: name,
+			Kind: KindMap,
+			Key:  &key,
+			Elem: &elem,
 		}, nil
 
 	case *ast.StarExpr:

@@ -463,6 +463,35 @@ func writeLuaSerializeField(b *strings.Builder, recv string, f parser.Field, ind
 			}
 		}
 		fmt.Fprintf(b, "%send\n", indent)
+	case parser.KindMap:
+		snake := ToSnakeCase(f.Name)
+		keysVar := "_keys_" + snake
+		lenVar := "_len_" + snake
+		iVar := "_i_" + snake
+		keyField := *f.Key
+		keyField.Name = snake + " key"
+		body := indent + "    "
+		fmt.Fprintf(b, "%slocal %s = {}\n", indent, keysVar)
+		fmt.Fprintf(b, "%sfor _k in pairs(%s or {}) do %s[#%s + 1] = _k end\n", indent, access, keysVar, keysVar)
+		fmt.Fprintf(b, "%stable.sort(%s)\n", indent, keysVar)
+		fmt.Fprintf(b, "%slocal %s = ensure_u16_limit(#%s, %q)\n", indent, lenVar, keysVar, "map length for "+snake)
+		fmt.Fprintf(b, "%spart_idx = part_idx + 1; parts[part_idx] = write_u16_le(%s)\n", indent, lenVar)
+		fmt.Fprintf(b, "%sfor %s = 1, %s do\n", indent, iVar, lenVar)
+		fmt.Fprintf(b, "%slocal _k = %s[%s]\n", body, keysVar, iVar)
+		if err := writeLuaSerializePrimitive(b, "_k", keyField, body); err != nil {
+			return err
+		}
+		fmt.Fprintf(b, "%slocal _v = %s[_k]\n", body, access)
+		if f.Elem.Kind == parser.KindNested {
+			fmt.Fprintf(b, "%spart_idx = part_idx + 1; parts[part_idx] = M.serialize_%s(_v)\n", body, ToSnakeCase(f.Elem.TypeName))
+		} else {
+			valField := *f.Elem
+			valField.Name = snake + " value"
+			if err := writeLuaSerializePrimitive(b, "_v", valField, body); err != nil {
+				return err
+			}
+		}
+		fmt.Fprintf(b, "%send\n", indent)
 	}
 	return nil
 }
@@ -567,6 +596,42 @@ func writeLuaDeserializeField(b *strings.Builder, recv string, f parser.Field, i
 				return err
 			}
 		}
+		fmt.Fprintf(b, "%send\n", indent)
+	case parser.KindMap:
+		snake := ToSnakeCase(f.Name)
+		lenVar := "_len_" + snake
+		iVar := "_i_" + snake
+		prevVar := "_prev_" + snake
+		keyField := *f.Key
+		keyField.Name = snake + " key"
+		body := indent + "    "
+		if needsBoundsCheck {
+			fmt.Fprintf(b, "%scheck_bounds(data, offset, 2, %q)\n", indent, "map length for "+snake)
+		}
+		fmt.Fprintf(b, "%slocal %s = read_u16_le(data, offset)\n", indent, lenVar)
+		fmt.Fprintf(b, "%soffset = offset + 2\n", indent)
+		fmt.Fprintf(b, "%s%s = {}\n", indent, access)
+		fmt.Fprintf(b, "%slocal %s = nil\n", indent, prevVar)
+		fmt.Fprintf(b, "%sfor %s = 1, %s do\n", indent, iVar, lenVar)
+		fmt.Fprintf(b, "%slocal _k\n", body)
+		if err := writeLuaDeserializePrimitive(b, "_k", keyField, body, needsBoundsCheck); err != nil {
+			return err
+		}
+		fmt.Fprintf(b, "%sif %s ~= nil and _k <= %s then error(%q) end\n", body, prevVar, prevVar, "arpack: map keys out of order for "+snake)
+		fmt.Fprintf(b, "%s%s = _k\n", body, prevVar)
+		fmt.Fprintf(b, "%slocal _v\n", body)
+		if f.Elem.Kind == parser.KindNested {
+			fmt.Fprintf(b, "%slocal _nested_v, _n = M.deserialize_%s(data, offset)\n", body, ToSnakeCase(f.Elem.TypeName))
+			fmt.Fprintf(b, "%s_v = _nested_v\n", body)
+			fmt.Fprintf(b, "%soffset = offset + _n\n", body)
+		} else {
+			valField := *f.Elem
+			valField.Name = snake + " value"
+			if err := writeLuaDeserializePrimitive(b, "_v", valField, body, needsBoundsCheck); err != nil {
+				return err
+			}
+		}
+		fmt.Fprintf(b, "%s%s[_k] = _v\n", body, access)
 		fmt.Fprintf(b, "%send\n", indent)
 	}
 	return nil
@@ -763,7 +828,7 @@ func luaDefaultValue(f parser.Field, enumNames map[string]struct{}) string {
 		}
 	case parser.KindNested:
 		return fmt.Sprintf("M.new_%s()", ToSnakeCase(f.TypeName))
-	case parser.KindFixedArray, parser.KindSlice:
+	case parser.KindFixedArray, parser.KindSlice, parser.KindMap:
 		return "{}"
 	}
 	return "nil"

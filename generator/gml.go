@@ -29,7 +29,7 @@ func GenerateGMLSchema(schema parser.Schema) ([]byte, error) {
 	if len(messages) > 0 {
 		needsLengthGuards := schemaNeedsLengthGuards(messages)
 		needsQuantGuards := schemaNeedsQuantRangeGuards(messages)
-		writeGMLHelpers(&b, needsLengthGuards, needsQuantGuards)
+		writeGMLHelpers(&b, needsLengthGuards, needsQuantGuards, anyField(messages, isStringKeyMap))
 	}
 
 	for _, enum := range schema.Enums {
@@ -54,7 +54,7 @@ func GenerateGMLSchema(schema parser.Schema) ([]byte, error) {
 	return []byte(b.String()), nil
 }
 
-func writeGMLHelpers(b *strings.Builder, needsLengthGuards, needsQuantGuards bool) {
+func writeGMLHelpers(b *strings.Builder, needsLengthGuards, needsQuantGuards, needsByteCompare bool) {
 	b.WriteString("function arpack_ensure_readable(_buf, _needed, _context)\n")
 	b.WriteString("{\n")
 	b.WriteString("    var _pos = buffer_tell(_buf);\n")
@@ -73,6 +73,21 @@ func writeGMLHelpers(b *strings.Builder, needsLengthGuards, needsQuantGuards boo
 		b.WriteString("        show_error(\"arpack: \" + _context + \" exceeds uint16 limit\", true);\n")
 		b.WriteString("    }\n")
 		b.WriteString("    return _length;\n")
+		b.WriteString("}\n\n")
+	}
+
+	if needsByteCompare {
+		b.WriteString("function arpack_compare_string_bytes(_a, _b)\n")
+		b.WriteString("{\n")
+		b.WriteString("    var _la = string_byte_length(_a);\n")
+		b.WriteString("    var _lb = string_byte_length(_b);\n")
+		b.WriteString("    var _n = min(_la, _lb);\n")
+		b.WriteString("    for (var _i = 1; _i <= _n; _i++)\n")
+		b.WriteString("    {\n")
+		b.WriteString("        var _d = string_byte_at(_a, _i) - string_byte_at(_b, _i);\n")
+		b.WriteString("        if (_d != 0) return _d;\n")
+		b.WriteString("    }\n")
+		b.WriteString("    return _la - _lb;\n")
 		b.WriteString("}\n\n")
 	}
 
@@ -232,6 +247,39 @@ func writeGMLSerializeField(b *strings.Builder, recv string, f parser.Field, ind
 			return err
 		}
 		fmt.Fprintf(b, "%s}\n", indent)
+	case parser.KindMap:
+		lenVar := gmlLenVar(f)
+		iVar := gmlLoopVar(f)
+		keysVar := "_keys" + gmlVarSuffix(f.Name)
+		keyField := *f.Key
+		keyField.Name = f.Name + " key"
+		body := indent + "    "
+		// ponytail: ds_map_keys_to_array needs GM 2.3.1+; swap for a ds_map_find_first/next loop if 2.3.0 matters.
+		fmt.Fprintf(b, "%svar %s = ds_map_keys_to_array(%s);\n", indent, keysVar, access)
+		if isString(*f.Key) {
+			fmt.Fprintf(b, "%sarray_sort(%s, arpack_compare_string_bytes);\n", indent, keysVar)
+		} else {
+			fmt.Fprintf(b, "%sarray_sort(%s, true);\n", indent, keysVar)
+		}
+		fmt.Fprintf(b, "%svar %s = arpack_ensure_u16_length(array_length(%s), %q);\n", indent, lenVar, keysVar, lengthContext(f))
+		fmt.Fprintf(b, "%sbuffer_write(_buf, buffer_u16, %s);\n", indent, lenVar)
+		fmt.Fprintf(b, "%sfor (var %s = 0; %s < %s; %s++)\n", indent, iVar, iVar, lenVar, iVar)
+		fmt.Fprintf(b, "%s{\n", indent)
+		fmt.Fprintf(b, "%svar _k = %s[%s];\n", body, keysVar, iVar)
+		if err := writeGMLSerializePrimitive(b, "_k", keyField, body); err != nil {
+			return err
+		}
+		fmt.Fprintf(b, "%svar _v = %s[? _k];\n", body, access)
+		if f.Elem.Kind == parser.KindNested {
+			fmt.Fprintf(b, "%s_v.serialize(_buf);\n", body)
+		} else {
+			valField := *f.Elem
+			valField.Name = f.Name + " value"
+			if err := writeGMLSerializePrimitive(b, "_v", valField, body); err != nil {
+				return err
+			}
+		}
+		fmt.Fprintf(b, "%s}\n", indent)
 	}
 	return nil
 }
@@ -320,6 +368,40 @@ func writeGMLDeserializeField(b *strings.Builder, recv string, f parser.Field, i
 		if err := writeGMLDeserializeField(b, recv, elemField, indent+"    "); err != nil {
 			return err
 		}
+		fmt.Fprintf(b, "%s}\n", indent)
+	case parser.KindMap:
+		lenVar := gmlLenVar(f)
+		iVar := gmlLoopVar(f)
+		prevVar := "_prev" + gmlVarSuffix(f.Name)
+		keyField := *f.Key
+		keyField.Name = f.Name + " key"
+		body := indent + "    "
+		fmt.Fprintf(b, "%sarpack_ensure_readable(_buf, 2, %q);\n", indent, lengthContext(f))
+		fmt.Fprintf(b, "%svar %s = buffer_read(_buf, buffer_u16);\n", indent, lenVar)
+		fmt.Fprintf(b, "%svar %s = undefined;\n", indent, prevVar)
+		fmt.Fprintf(b, "%sfor (var %s = 0; %s < %s; %s++)\n", indent, iVar, iVar, lenVar, iVar)
+		fmt.Fprintf(b, "%s{\n", indent)
+		fmt.Fprintf(b, "%svar _k;\n", body)
+		if err := writeGMLDeserializePrimitive(b, "_k", keyField, body); err != nil {
+			return err
+		}
+		cmp := "_k <= " + prevVar
+		if isString(*f.Key) {
+			cmp = "arpack_compare_string_bytes(_k, " + prevVar + ") <= 0"
+		}
+		fmt.Fprintf(b, "%sif (%s > 0 && %s) show_error(%q, true);\n", body, iVar, cmp, "arpack: map keys out of order for "+f.Name)
+		fmt.Fprintf(b, "%s%s = _k;\n", body, prevVar)
+		fmt.Fprintf(b, "%svar _v;\n", body)
+		if f.Elem.Kind == parser.KindNested {
+			fmt.Fprintf(b, "%s_v = %s.deserialize(_buf)[0];\n", body, f.Elem.TypeName)
+		} else {
+			valField := *f.Elem
+			valField.Name = f.Name + " value"
+			if err := writeGMLDeserializePrimitive(b, "_v", valField, body); err != nil {
+				return err
+			}
+		}
+		fmt.Fprintf(b, "%sds_map_set(%s, _k, _v);\n", body, access)
 		fmt.Fprintf(b, "%s}\n", indent)
 	}
 	return nil
@@ -452,6 +534,8 @@ func gmlDefaultValue(f parser.Field, enumNames map[string]struct{}) string {
 		return "new " + f.TypeName + "()"
 	case parser.KindFixedArray, parser.KindSlice:
 		return "array_create(0)"
+	case parser.KindMap:
+		return "ds_map_create()"
 	}
 	return "0"
 }
@@ -460,7 +544,7 @@ func gmlDefaultNeedsFactory(f parser.Field) bool {
 	switch f.Kind {
 	case parser.KindPrimitive:
 		return false
-	case parser.KindNested, parser.KindFixedArray, parser.KindSlice:
+	case parser.KindNested, parser.KindFixedArray, parser.KindSlice, parser.KindMap:
 		return true
 	}
 	return true

@@ -22,6 +22,9 @@ func GenerateCSharpSchema(schema parser.Schema, namespace string) ([]byte, error
 	b.WriteString("#pragma warning disable CS8500\n\n")
 
 	b.WriteString("using System;\n")
+	if anyField(messages, isMap) {
+		b.WriteString("using System.Collections.Generic;\n")
+	}
 	if anyField(messages, isString) {
 		b.WriteString("using System.Text;\n")
 	}
@@ -163,6 +166,12 @@ func GenerateCSharpSchema(schema parser.Schema, namespace string) ([]byte, error
 		b.WriteString("                throw new InvalidOperationException(\"arpack: \" + context + \" exceeds uint16 limit\");\n")
 		b.WriteString("            }\n")
 		b.WriteString("            return (ushort)length;\n")
+		b.WriteString("        }\n\n")
+	}
+	if anyField(messages, isStringKeyMap) {
+		b.WriteString("        internal static int CompareBytes(byte[] a, byte[] b)\n")
+		b.WriteString("        {\n")
+		b.WriteString("            return new ReadOnlySpan<byte>(a).SequenceCompareTo(b);\n")
 		b.WriteString("        }\n\n")
 	}
 	if needsQuantGuards {
@@ -327,6 +336,51 @@ func writeCSharpSerializeField(b *strings.Builder, f parser.Field, indent string
 			return err
 		}
 		fmt.Fprintf(b, "%s    }\n%s}\n", indent, indent)
+	case parser.KindMap:
+		lenVar := "_len" + f.Name
+		keysVar := "_keys" + f.Name
+		iVar := "_i" + f.Name
+		keyField := *f.Key
+		keyField.Name = f.Name + " key"
+		fmt.Fprintf(b, "%sArpackGenerated.EnsureWritable(ptr, end, 2, %q);\n", indent, lengthContext(f))
+		fmt.Fprintf(b, "%sushort %s = ArpackGenerated.EnsureU16Length(%s?.Count ?? 0, %q); ArpackGenerated.WriteU16LE(ptr, %s); ptr += 2;\n",
+			indent, lenVar, f.Name, lengthContext(f), lenVar)
+		fmt.Fprintf(b, "%sif (%s != null)\n%s{\n", indent, f.Name, indent)
+		inner := indent + "    "
+		body := inner + "    "
+		if isString(*f.Key) {
+			valType := csharpTypeName(*f.Elem, enumNames)
+			fmt.Fprintf(b, "%svar %s = new KeyValuePair<byte[], %s>[%s.Count]; int _n%s = 0;\n", inner, keysVar, valType, f.Name, f.Name)
+			fmt.Fprintf(b, "%sforeach (var _e in %s) { %s[_n%s++] = new KeyValuePair<byte[], %s>(Encoding.UTF8.GetBytes(_e.Key), _e.Value); }\n",
+				inner, f.Name, keysVar, f.Name, valType)
+			fmt.Fprintf(b, "%sArray.Sort(%s, (a, b) => ArpackGenerated.CompareBytes(a.Key, b.Key));\n", inner, keysVar)
+			fmt.Fprintf(b, "%sfor (int %s = 0; %s < %s.Length; %s++)\n%s{\n", inner, iVar, iVar, keysVar, iVar, inner)
+			fmt.Fprintf(b, "%sbyte[] _kb = %s[%s].Key;\n", body, keysVar, iVar)
+			fmt.Fprintf(b, "%sArpackGenerated.EnsureWritable(ptr, end, 2, %q);\n", body, "string length for "+keyField.Name)
+			fmt.Fprintf(b, "%sArpackGenerated.WriteU16LE(ptr, ArpackGenerated.EnsureU16Length(_kb.Length, %q)); ptr += 2;\n", body, lengthContext(keyField))
+			fmt.Fprintf(b, "%sArpackGenerated.EnsureWritable(ptr, end, _kb.Length, %q);\n", body, "string data for "+keyField.Name)
+			fmt.Fprintf(b, "%snew ReadOnlySpan<byte>(_kb).CopyTo(new Span<byte>(ptr, _kb.Length)); ptr += _kb.Length;\n", body)
+			fmt.Fprintf(b, "%svar _v = %s[%s].Value;\n", body, keysVar, iVar)
+		} else {
+			fmt.Fprintf(b, "%svar %s = new %s[%s.Count]; %s.Keys.CopyTo(%s, 0); Array.Sort(%s);\n",
+				inner, keysVar, csharpTypeName(*f.Key, enumNames), f.Name, f.Name, keysVar, keysVar)
+			fmt.Fprintf(b, "%sfor (int %s = 0; %s < %s.Length; %s++)\n%s{\n", inner, iVar, iVar, keysVar, iVar, inner)
+			fmt.Fprintf(b, "%svar _k = %s[%s];\n", body, keysVar, iVar)
+			if err := writeCSharpSerializePrimitive(b, "_k", keyField, body, enumNames); err != nil {
+				return err
+			}
+			fmt.Fprintf(b, "%svar _v = %s[_k];\n", body, f.Name)
+		}
+		if f.Elem.Kind == parser.KindNested {
+			fmt.Fprintf(b, "%sptr += _v.Serialize(ptr, (int)(end - ptr));\n", body)
+		} else {
+			valField := *f.Elem
+			valField.Name = f.Name + " value"
+			if err := writeCSharpSerializePrimitive(b, "_v", valField, body, enumNames); err != nil {
+				return err
+			}
+		}
+		fmt.Fprintf(b, "%s}\n%s}\n", inner, indent)
 	}
 	return nil
 }
@@ -449,6 +503,51 @@ func writeCSharpDeserializeField(
 			return err
 		}
 		fmt.Fprintf(b, "%s}\n", indent)
+	case parser.KindMap:
+		lenVar := "_len" + f.Name
+		iVar := "_i" + f.Name
+		prevVar := "_prev" + f.Name
+		keyType := csharpTypeName(*f.Key, enumNames)
+		valType := csharpTypeName(*f.Elem, enumNames)
+		keyField := *f.Key
+		keyField.Name = f.Name + " key"
+		orderErr := fmt.Sprintf("throw new ArgumentException(%q);", "arpack: map keys out of order for "+f.Name)
+		fmt.Fprintf(b, "%sArpackGenerated.EnsureReadable(ptr, end, 2, %q);\n", indent, lengthContext(f))
+		fmt.Fprintf(b, "%sint %s = ArpackGenerated.ReadU16LE(ptr); ptr += 2;\n", indent, lenVar)
+		fmt.Fprintf(b, "%s%s = new Dictionary<%s, %s>(%s);\n", indent, access, keyType, valType, lenVar)
+		body := indent + "    "
+		if isString(*f.Key) {
+			fmt.Fprintf(b, "%sbyte* %s = null; int %sLen = 0;\n", indent, prevVar, prevVar)
+			fmt.Fprintf(b, "%sfor (int %s = 0; %s < %s; %s++)\n%s{\n", indent, iVar, iVar, lenVar, iVar, indent)
+			fmt.Fprintf(b, "%sArpackGenerated.EnsureReadable(ptr, end, 2, %q);\n", body, "string length for "+keyField.Name)
+			fmt.Fprintf(b, "%sint _klen = ArpackGenerated.ReadU16LE(ptr); ptr += 2;\n", body)
+			fmt.Fprintf(b, "%sArpackGenerated.EnsureReadable(ptr, end, _klen, %q);\n", body, "string data for "+keyField.Name)
+			fmt.Fprintf(b, "%sif (%s > 0 && new ReadOnlySpan<byte>(ptr, _klen).SequenceCompareTo(new ReadOnlySpan<byte>(%s, %sLen)) <= 0) %s\n",
+				body, iVar, prevVar, prevVar, orderErr)
+			fmt.Fprintf(b, "%s%s = ptr; %sLen = _klen;\n", body, prevVar, prevVar)
+			fmt.Fprintf(b, "%sstring _k = _klen > 0 ? Encoding.UTF8.GetString(ptr, _klen) : string.Empty; ptr += _klen;\n", body)
+		} else {
+			fmt.Fprintf(b, "%s%s %s = default;\n", indent, keyType, prevVar)
+			fmt.Fprintf(b, "%sfor (int %s = 0; %s < %s; %s++)\n%s{\n", indent, iVar, iVar, lenVar, iVar, indent)
+			fmt.Fprintf(b, "%s%s _k;\n", body, keyType)
+			if err := writeCSharpDeserializePrimitive(b, "_k", keyField, body, enumNames); err != nil {
+				return err
+			}
+			fmt.Fprintf(b, "%sif (%s > 0 && _k <= %s) %s\n", body, iVar, prevVar, orderErr)
+			fmt.Fprintf(b, "%s%s = _k;\n", body, prevVar)
+		}
+		fmt.Fprintf(b, "%s%s _v;\n", body, valType)
+		if f.Elem.Kind == parser.KindNested {
+			fmt.Fprintf(b, "%sint _n%s = %s.Deserialize(ptr, (int)(end - ptr), out _v); ptr += _n%s;\n", body, f.Name, valType, f.Name)
+		} else {
+			valField := *f.Elem
+			valField.Name = f.Name + " value"
+			if err := writeCSharpDeserializePrimitive(b, "_v", valField, body, enumNames); err != nil {
+				return err
+			}
+		}
+		fmt.Fprintf(b, "%s%s[_k] = _v;\n", body, access)
+		fmt.Fprintf(b, "%s}\n", indent)
 	}
 	return nil
 }
@@ -535,6 +634,8 @@ func csharpTypeName(f parser.Field, enumNames map[string]struct{}) string {
 		return csharpTypeName(*f.Elem, enumNames) + "[]"
 	case parser.KindSlice:
 		return csharpTypeName(*f.Elem, enumNames) + "[]"
+	case parser.KindMap:
+		return "Dictionary<" + csharpTypeName(*f.Key, enumNames) + ", " + csharpTypeName(*f.Elem, enumNames) + ">"
 	}
 	return "unknown"
 }

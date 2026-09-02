@@ -17,9 +17,37 @@ import (
 var (
 	sinkBytes           []byte
 	sinkArpackMove      arpackmsg.MoveMessage
+	sinkArpackScores    int
 	sinkProtoPlayerID   uint32
+	sinkProtoScores     int
 	sinkFlatBuffersMove benchfbs.MoveMsg
 )
+
+// testScoreboardArpack returns a ScoreboardMessage with 8 entries per map.
+func testScoreboardArpack() arpackmsg.ScoreboardMessage {
+	msg := arpackmsg.ScoreboardMessage{
+		Scores:    make(map[string]int32, 8),
+		Positions: make(map[uint16]arpackmsg.Vector3, 8),
+	}
+	for i := 0; i < 8; i++ {
+		msg.Scores[fmt.Sprintf("player%d", i)] = int32(i * 100)
+		msg.Positions[uint16(i)] = arpackmsg.Vector3{X: float32(i), Y: float32(-i), Z: 0}
+	}
+	return msg
+}
+
+// testScoreboardProto mirrors testScoreboardArpack for protobuf.
+func testScoreboardProto() *benchpb.ScoreboardMessage {
+	msg := &benchpb.ScoreboardMessage{
+		Scores:    make(map[string]int32, 8),
+		Positions: make(map[uint32]*benchpb.Vector3, 8),
+	}
+	for i := 0; i < 8; i++ {
+		msg.Scores[fmt.Sprintf("player%d", i)] = int32(i * 100)
+		msg.Positions[uint32(i)] = &benchpb.Vector3{X: float32(i), Y: float32(-i), Z: 0}
+	}
+	return msg
+}
 
 // testMoveArpack returns a fully populated arpackmsg.MoveMessage for benchmarks.
 func testMoveArpack() arpackmsg.MoveMessage {
@@ -175,6 +203,40 @@ func BenchmarkArPack_Unmarshal(b *testing.B) {
 	sinkArpackMove = out
 }
 
+func BenchmarkArPack_MapMarshal(b *testing.B) {
+	msg := testScoreboardArpack()
+	buf := msg.Marshal(nil)
+	wireSize := len(buf)
+
+	b.ReportAllocs()
+	b.SetBytes(int64(wireSize))
+	b.ResetTimer()
+
+	var out []byte
+	for i := 0; i < b.N; i++ {
+		out = msg.Marshal(out[:0])
+	}
+	sinkBytes = out
+}
+
+func BenchmarkArPack_MapUnmarshal(b *testing.B) {
+	msg := testScoreboardArpack()
+	buf := msg.Marshal(nil)
+	wireSize := len(buf)
+
+	b.ReportAllocs()
+	b.SetBytes(int64(wireSize))
+	b.ResetTimer()
+
+	var out arpackmsg.ScoreboardMessage // reused: decode clears and refills the maps
+	for i := 0; i < b.N; i++ {
+		if _, err := out.Unmarshal(buf); err != nil {
+			b.Fatal(err)
+		}
+	}
+	sinkArpackScores = len(out.Scores)
+}
+
 // --- Protobuf benchmarks ---
 
 func BenchmarkProto_Marshal(b *testing.B) {
@@ -221,7 +283,51 @@ func BenchmarkProto_Unmarshal(b *testing.B) {
 	sinkProtoPlayerID = out.PlayerId
 }
 
-// --- FlatBuffers benchmarks ---
+func BenchmarkProto_MapMarshal(b *testing.B) {
+	msg := testScoreboardProto()
+	buf, err := proto.Marshal(msg)
+	if err != nil {
+		b.Fatal(err)
+	}
+	wireSize := len(buf)
+
+	b.ReportAllocs()
+	b.SetBytes(int64(wireSize))
+	b.ResetTimer()
+
+	var out []byte
+	for i := 0; i < b.N; i++ {
+		out, err = proto.MarshalOptions{Deterministic: true}.MarshalAppend(out[:0], msg)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+	sinkBytes = out
+}
+
+func BenchmarkProto_MapUnmarshal(b *testing.B) {
+	msg := testScoreboardProto()
+	buf, err := proto.Marshal(msg)
+	if err != nil {
+		b.Fatal(err)
+	}
+	wireSize := len(buf)
+
+	b.ReportAllocs()
+	b.SetBytes(int64(wireSize))
+	b.ResetTimer()
+
+	var out benchpb.ScoreboardMessage
+	for i := 0; i < b.N; i++ {
+		out.Reset()
+		if err := proto.Unmarshal(buf, &out); err != nil {
+			b.Fatal(err)
+		}
+	}
+	sinkProtoScores = len(out.Scores)
+}
+
+// --- FlatBuffers benchmarks (no map benchmark: FlatBuffers has no native map type) ---
 
 func BenchmarkFlatBuffers_Marshal(b *testing.B) {
 	msg := testMoveFbs()

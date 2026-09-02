@@ -37,3 +37,8 @@ type EnvelopeMessage struct {
 	Code    Opcode
 	Counter uint8
 }
+
+type ScoreboardMessage struct {
+	Scores    map[string]int32
+	Positions map[uint16]Vector3
+}

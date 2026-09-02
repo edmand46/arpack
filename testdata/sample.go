@@ -46,3 +46,9 @@ type QuantTestMessage struct {
 	NearZeroVal   float64 `pack:"min=-500,max=500,bits=16"`
 	NearHighVal   float64 `pack:"min=-500,max=500,bits=16"`
 }
+
+type MapMessage struct {
+	ByName map[string]int32
+	ByID   map[uint16]Vector3
+	ByOp   map[Opcode]string
+}

@@ -814,3 +814,123 @@ end
 		t.Fatalf("expected quantized range guard, got %q", got)
 	}
 }
+
+func TestGenerateLua_Map(t *testing.T) {
+	schema, err := parser.ParseSchemaSource(`package messages
+
+type MapMessage struct {
+	ByName map[string]int32
+	ByID   map[uint16]int32
+}
+`)
+	if err != nil {
+		t.Fatalf("ParseSchemaSource: %v", err)
+	}
+	lua, err := GenerateLuaSchema(schema, "messages")
+	if err != nil {
+		t.Fatalf("GenerateLuaSchema: %v", err)
+	}
+	code := string(lua)
+	for _, want := range []string{
+		"for _k in pairs(msg.by_name or {}) do _keys_by_name[#_keys_by_name + 1] = _k end",
+		"table.sort(_keys_by_name)",
+		`ensure_u16_limit(#_keys_by_name, "map length for by_name")`,
+		`if _prev_by_name ~= nil and _k <= _prev_by_name then error("arpack: map keys out of order for by_name") end`,
+		"msg.by_id[_k] = _v",
+	} {
+		if !strings.Contains(code, want) {
+			t.Fatalf("missing %q in:\n%s", want, code)
+		}
+	}
+
+	if _, err := exec.LookPath("luajit"); err != nil {
+		t.Skip("luajit not found")
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "messages_gen.lua"), lua, 0o600); err != nil {
+		t.Fatalf("write module: %v", err)
+	}
+	script := `local messages = require("messages_gen")
+
+local function hex(data)
+    local out = {}
+    for i = 1, #data do out[#out + 1] = string.format("%02x", string.byte(data, i)) end
+    return table.concat(out)
+end
+
+local function report(label, ok, err)
+    print(label .. ":" .. (ok and "OK" or tostring(err)))
+end
+
+local msg = messages.new_map_message()
+msg.by_name = { b = 2, a = 1, ab = 3 }
+msg.by_id = { [2] = 20, [1] = 10 }
+local ok, wire = pcall(messages.serialize_map_message, msg)
+local want = "0300" .. "010061" .. "01000000" .. "02006162" .. "03000000" .. "010062" .. "02000000" .. "0200" .. "0100" .. "0a000000" .. "0200" .. "14000000"
+report("WIRE", ok and hex(wire) == want, ok and hex(wire) or wire)
+
+local ok2, decoded = pcall(messages.deserialize_map_message, wire)
+report("ROUNDTRIP", ok2 and decoded.by_name.ab == 3 and decoded.by_id[1] == 10 and decoded.by_id[2] == 20, decoded)
+
+local ok3, err3 = pcall(messages.deserialize_map_message, string.char(2, 0, 1, 0, 0x62, 1, 0, 0, 0, 1, 0, 0x61, 2, 0, 0, 0, 0, 0))
+report("UNSORTED", ok3, err3)
+local ok4, err4 = pcall(messages.deserialize_map_message, string.char(2, 0, 1, 0, 0x61, 1, 0, 0, 0, 1, 0, 0x61, 2, 0, 0, 0, 0, 0))
+report("DUPLICATE", ok4, err4)
+local ok5, err5 = pcall(messages.deserialize_map_message, string.char(0, 0, 2, 0, 2, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0))
+report("INT_UNSORTED", ok5, err5)
+`
+	if err := os.WriteFile(filepath.Join(dir, "check.lua"), []byte(script), 0o600); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+	cmd := exec.Command("luajit", "check.lua")
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("luajit failed: %v\n%s", err, out)
+	}
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	if len(lines) != 5 {
+		t.Fatalf("expected 5 output lines, got %d: %q", len(lines), string(out))
+	}
+	if lines[0] != "WIRE:OK" {
+		t.Fatalf("keys not written in sorted order: %q", lines[0])
+	}
+	if lines[1] != "ROUNDTRIP:OK" {
+		t.Fatalf("roundtrip failed: %q", lines[1])
+	}
+	for i, want := range []string{
+		"UNSORTED:", "map keys out of order for by_name",
+		"DUPLICATE:", "map keys out of order for by_name",
+		"INT_UNSORTED:", "map keys out of order for by_id",
+	} {
+		line := lines[2+i/2]
+		if !strings.Contains(line, want) {
+			t.Fatalf("line %d: expected %q, got %q", 2+i/2, want, line)
+		}
+	}
+}
+
+func TestGenerateLua_Int64MapKeyNotSupported(t *testing.T) {
+	schema := parser.Schema{
+		Messages: []parser.Message{
+			{
+				Name: "WithInt64Key",
+				Fields: []parser.Field{
+					{
+						Name: "Values",
+						Kind: parser.KindMap,
+						Key:  &parser.Field{Kind: parser.KindPrimitive, Primitive: parser.KindInt64},
+						Elem: &parser.Field{Kind: parser.KindPrimitive, Primitive: parser.KindUint8},
+					},
+				},
+			},
+		},
+	}
+	_, err := GenerateLuaSchema(schema, "test")
+	if err == nil {
+		t.Fatal("expected error for int64 map key, got nil")
+	}
+	if !strings.Contains(err.Error(), "int64/uint64") {
+		t.Errorf("expected error mentioning int64/uint64, got: %v", err)
+	}
+}

@@ -30,6 +30,9 @@ func GenerateGoSchema(schema parser.Schema, pkgName string) ([]byte, error) {
 		if anyField(messages, isFloat) {
 			b.WriteString("\t\"math\"\n")
 		}
+		if anyField(messages, isMap) {
+			b.WriteString("\t\"slices\"\n")
+		}
 		b.WriteString(")\n\n")
 	}
 
@@ -146,6 +149,30 @@ func writeGoMarshalField(b *strings.Builder, recv string, f parser.Field, indent
 		elemField.Name = f.Name + "[_i" + f.Name + "]"
 		if err := writeGoMarshalField(b, recv, elemField, indent+"\t"); err != nil {
 			return err
+		}
+		fmt.Fprintf(b, "%s}\n", indent)
+	case parser.KindMap:
+		keysVar := "_keys" + f.Name
+		fmt.Fprintf(b, "%s%s := make([]%s, 0, len(%s))\n", indent, keysVar, f.Key.GoTypeName(), access)
+		fmt.Fprintf(b, "%sfor _k := range %s { %s = append(%s, _k) }\n", indent, access, keysVar, keysVar)
+		fmt.Fprintf(b, "%sslices.Sort(%s)\n", indent, keysVar)
+		fmt.Fprintf(b, "%sbuf = binary.LittleEndian.AppendUint16(buf, arpackEnsureUint16Length(len(%s), %q))\n",
+			indent, keysVar, lengthContext(f))
+		keyField := *f.Key
+		keyField.Name = f.Name + " key"
+		fmt.Fprintf(b, "%sfor _, _k := range %s {\n", indent, keysVar)
+		if err := writeGoMarshalPrimitive(b, "_k", keyField, indent+"\t"); err != nil {
+			return err
+		}
+		fmt.Fprintf(b, "%s\t_v := %s[_k]\n", indent, access)
+		if f.Elem.Kind == parser.KindNested {
+			fmt.Fprintf(b, "%s\tbuf = _v.Marshal(buf)\n", indent)
+		} else {
+			valField := *f.Elem
+			valField.Name = f.Name + " value"
+			if err := writeGoMarshalPrimitive(b, "_v", valField, indent+"\t"); err != nil {
+				return err
+			}
 		}
 		fmt.Fprintf(b, "%s}\n", indent)
 	}
@@ -279,6 +306,40 @@ func writeGoUnmarshalField(b *strings.Builder, recv string, f parser.Field, inde
 			}
 			fmt.Fprintf(b, "%s}\n", indent)
 		}
+
+	case parser.KindMap:
+		// ponytail: generic per-field bounds checks; hoist like the slice fast path if bench shows.
+		lenVar := "_len" + f.Name
+		iVar := "_i" + f.Name
+		prevVar := "_prev" + f.Name
+		fmt.Fprintf(b, "%sif len(data) < offset+2 { return 0, errors.New(\"arpack: buffer too short\") }\n", indent)
+		fmt.Fprintf(b, "%s%s := int(binary.LittleEndian.Uint16(data[offset:]))\n", indent, lenVar)
+		fmt.Fprintf(b, "%soffset += 2\n", indent)
+		fmt.Fprintf(b, "%sif %s == nil { %s = make(%s, %s) } else { clear(%s) }\n",
+			indent, access, access, f.GoTypeName(), lenVar, access)
+		fmt.Fprintf(b, "%svar %s %s\n", indent, prevVar, f.Key.GoTypeName())
+		fmt.Fprintf(b, "%sfor %s := 0; %s < %s; %s++ {\n", indent, iVar, iVar, lenVar, iVar)
+		fmt.Fprintf(b, "%s\tvar _k %s\n", indent, f.Key.GoTypeName())
+		if err := writeGoUnmarshalPrimitive(b, "_k", *f.Key, indent+"\t"); err != nil {
+			return err
+		}
+		fmt.Fprintf(b, "%s\tif %s > 0 && _k <= %s { return 0, errors.New(\"arpack: map keys out of order for %s\") }\n",
+			indent, iVar, prevVar, f.Name)
+		fmt.Fprintf(b, "%s\t%s = _k\n", indent, prevVar)
+		fmt.Fprintf(b, "%s\tvar _v %s\n", indent, f.Elem.GoTypeName())
+		if f.Elem.Kind == parser.KindNested {
+			fmt.Fprintf(b, "%s\t_n, _err := _v.Unmarshal(data[offset:])\n", indent)
+			fmt.Fprintf(b, "%s\tif _err != nil { return 0, _err }\n", indent)
+			fmt.Fprintf(b, "%s\toffset += _n\n", indent)
+		} else {
+			valField := *f.Elem
+			valField.Name = f.Name + " value"
+			if err := writeGoUnmarshalPrimitive(b, "_v", valField, indent+"\t"); err != nil {
+				return err
+			}
+		}
+		fmt.Fprintf(b, "%s\t%s[_k] = _v\n", indent, access)
+		fmt.Fprintf(b, "%s}\n", indent)
 	}
 	return nil
 }
@@ -521,7 +582,7 @@ func goFieldContainsReferences(f parser.Field, messageIndex map[string]parser.Me
 	switch f.Kind {
 	case parser.KindPrimitive:
 		return f.Primitive == parser.KindString
-	case parser.KindSlice:
+	case parser.KindSlice, parser.KindMap:
 		return true
 	case parser.KindFixedArray:
 		if f.Elem == nil {

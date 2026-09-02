@@ -26,6 +26,7 @@ const (
 	KindNested
 	KindFixedArray
 	KindSlice
+	KindMap
 )
 
 type QuantInfo struct {
@@ -55,7 +56,8 @@ type Field struct {
 
 	TypeName string
 
-	Elem     *Field
+	Elem     *Field // slice/array element, or map value
+	Key      *Field // KindMap only
 	FixedLen int
 }
 
@@ -74,7 +76,7 @@ func (f *Field) WireSize() int {
 			return -1
 		}
 		return f.FixedLen * elemSize
-	case KindSlice:
+	case KindSlice, KindMap:
 		return -1
 	}
 	return 0
@@ -117,6 +119,8 @@ func (f *Field) GoTypeName() string {
 		return "[" + strconv.Itoa(f.FixedLen) + "]" + f.Elem.GoTypeName()
 	case KindSlice:
 		return "[]" + f.Elem.GoTypeName()
+	case KindMap:
+		return "map[" + f.Key.GoTypeName() + "]" + f.Elem.GoTypeName()
 	}
 	return "unknown"
 }

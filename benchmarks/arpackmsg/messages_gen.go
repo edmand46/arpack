@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"math"
+	"slices"
 )
 
 func arpackEnsureUint16Length(length int, context string) uint16 {
@@ -251,5 +252,108 @@ func (m *EnvelopeMessage) Unmarshal(data []byte) (int, error) {
 	}
 	m.Counter = data[offset]
 	offset += 1
+	return offset, nil
+}
+
+func (m *ScoreboardMessage) Marshal(buf []byte) []byte {
+	_keysScores := make([]string, 0, len(m.Scores))
+	for _k := range m.Scores {
+		_keysScores = append(_keysScores, _k)
+	}
+	slices.Sort(_keysScores)
+	buf = binary.LittleEndian.AppendUint16(buf, arpackEnsureUint16Length(len(_keysScores), "map length for Scores"))
+	for _, _k := range _keysScores {
+		buf = binary.LittleEndian.AppendUint16(buf, arpackEnsureUint16Length(len(_k), "string length for Scores key"))
+		buf = append(buf, _k...)
+		_v := m.Scores[_k]
+		buf = binary.LittleEndian.AppendUint32(buf, uint32(_v))
+	}
+	_keysPositions := make([]uint16, 0, len(m.Positions))
+	for _k := range m.Positions {
+		_keysPositions = append(_keysPositions, _k)
+	}
+	slices.Sort(_keysPositions)
+	buf = binary.LittleEndian.AppendUint16(buf, arpackEnsureUint16Length(len(_keysPositions), "map length for Positions"))
+	for _, _k := range _keysPositions {
+		buf = binary.LittleEndian.AppendUint16(buf, _k)
+		_v := m.Positions[_k]
+		buf = _v.Marshal(buf)
+	}
+	return buf
+}
+
+func (m *ScoreboardMessage) Unmarshal(data []byte) (int, error) {
+	if len(data) < 4 {
+		return 0, errors.New("arpack: buffer too short for ScoreboardMessage")
+	}
+	offset := 0
+	if len(data) < offset+2 {
+		return 0, errors.New("arpack: buffer too short")
+	}
+	_lenScores := int(binary.LittleEndian.Uint16(data[offset:]))
+	offset += 2
+	if m.Scores == nil {
+		m.Scores = make(map[string]int32, _lenScores)
+	} else {
+		clear(m.Scores)
+	}
+	var _prevScores string
+	for _iScores := 0; _iScores < _lenScores; _iScores++ {
+		var _k string
+		if len(data) < offset+2 {
+			return 0, errors.New("arpack: buffer too short")
+		}
+		_slen_k := int(binary.LittleEndian.Uint16(data[offset:]))
+		offset += 2
+		if len(data) < offset+_slen_k {
+			return 0, errors.New("arpack: buffer too short")
+		}
+		_b_k := data[offset : offset+_slen_k]
+		if _k != string(_b_k) {
+			_k = string(_b_k)
+		}
+		offset += _slen_k
+		if _iScores > 0 && _k <= _prevScores {
+			return 0, errors.New("arpack: map keys out of order for Scores")
+		}
+		_prevScores = _k
+		var _v int32
+		if len(data) < offset+4 {
+			return 0, errors.New("arpack: buffer too short")
+		}
+		_v = int32(binary.LittleEndian.Uint32(data[offset:]))
+		offset += 4
+		m.Scores[_k] = _v
+	}
+	if len(data) < offset+2 {
+		return 0, errors.New("arpack: buffer too short")
+	}
+	_lenPositions := int(binary.LittleEndian.Uint16(data[offset:]))
+	offset += 2
+	if m.Positions == nil {
+		m.Positions = make(map[uint16]Vector3, _lenPositions)
+	} else {
+		clear(m.Positions)
+	}
+	var _prevPositions uint16
+	for _iPositions := 0; _iPositions < _lenPositions; _iPositions++ {
+		var _k uint16
+		if len(data) < offset+2 {
+			return 0, errors.New("arpack: buffer too short")
+		}
+		_k = binary.LittleEndian.Uint16(data[offset:])
+		offset += 2
+		if _iPositions > 0 && _k <= _prevPositions {
+			return 0, errors.New("arpack: map keys out of order for Positions")
+		}
+		_prevPositions = _k
+		var _v Vector3
+		_n, _err := _v.Unmarshal(data[offset:])
+		if _err != nil {
+			return 0, _err
+		}
+		offset += _n
+		m.Positions[_k] = _v
+	}
 	return offset, nil
 }

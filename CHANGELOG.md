@@ -1,5 +1,27 @@
 # Changelog
 
+## [1.2.0] - 2026-09-02
+
+### Performance
+
+Go, Apple M3 Max, 5 runs (`make bench-stats`). New `ScoreboardMessage` benchmark: `map[string]int32` + `map[uint16]Vector3`, 8 entries each. Protobuf marshals with `Deterministic: true` so both sides sort keys.
+
+| Benchmark | ArPack | Protobuf |
+| --- | ---: | ---: |
+| Map Marshal | 332-349 ns/op, 128 B, 1 alloc | 2469-2520 ns/op, 960 B, 56 allocs |
+| Map Unmarshal | 273-278 ns/op, 64 B, 8 allocs | 1923-1966 ns/op, 1376 B, 57 allocs |
+
+ArPack map marshal allocates once for the sorted key slice; unmarshal allocates one string per key (decoded map reused via `clear`). FlatBuffers has no native map type and is not compared. Existing `MoveMessage` numbers are unchanged within run-to-run variance (Marshal 8.9-9.0 ns/op, Unmarshal 25.0-25.7 ns/op).
+
+### Added
+
+- **`map[K]V` fields** in all targets. Keys: `string`, explicit-width integers, schema enums; values follow slice-element rules (primitives, strings, enums, nested structs). Wire: `uint16` entry count followed by `(key, value)` pairs in ascending key order (numeric for integers/enums, UTF-8 byte order for strings, identical across languages). Deserializers reject unsorted or duplicate keys. Representation: Go `map[K]V` (decode reuses an existing map via `clear`), C# `Dictionary<K, V>`, TypeScript `Map<K, V>`, Lua table, GML `ds_map` (caller owns and destroys).
+
+### Other
+
+- Parser error for nested collections now reads `nested arrays/slices/maps not supported (v1 limitation)` and also covers `map` values, `[]map` and `[N]map`.
+- Lua target rejects 64-bit map keys and values, like other 64-bit fields.
+
 ## [1.1.0] - 2026-09-02
 
 ### Performance
