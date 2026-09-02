@@ -2,40 +2,43 @@
 
 ## [1.1.0] - 2026-09-02
 
-### Changed
+### Performance
 
-- **Quant float64 canonicalization**: All four languages (Go, C#, TypeScript, Lua) now use identical float64 arithmetic with truncation toward zero for quantized float values. Previously, C# used `float` (32-bit) literals and Lua used `math.floor` (rounds toward negative infinity for negative values), causing wire divergence for negative quantized values.
-- **C# Deserialize signature** (breaking): The `Deserialize` method now takes `int length` parameter for explicit bounds checking. Update call sites: `X.Deserialize(ptr, out msg)` → `X.Deserialize(ptr, data.Length, out msg)`.
-- **C# Serialize signature** (breaking): `Serialize` now takes `int length` and performs explicit write bounds checks — an undersized buffer throws `ArgumentException` instead of silently corrupting memory. Update call sites: `msg.Serialize(ptr)` → `msg.Serialize(ptr, buf.Length)`.
-- **C#/TS output filenames** (breaking): output filenames now preserve internal casing and only uppercase the first letter (`netMsg.go` → `NetMsg.gen.cs`; previously `Netmsg.gen.cs`). Delete previously generated files with the old casing to avoid duplicate definitions.
-- **TypeScript namespace parameter removed**: `GenerateTypeScriptSchema` no longer takes a namespace parameter. (Existing change, now documented.)
-- **Parser now rejects nested collections**: Arrays/slices inside arrays/slices (`[][]float64`, `[3][]int32`) are now rejected with a clear error.
-- **Parser now rejects embedded struct fields**: Anonymous/embedded fields in structs now produce a clear error.
-- **Enum-only schemas allowed**: Schemas with only enums and no structs no longer cause a fatal error. The Go target is skipped for enum-only schemas with a notice (enum declarations already live in the Go schema source); C#/TS/Lua emit the enums.
-- **Atomic multi-target output**: the CLI now generates all requested targets in memory and writes files only if every target succeeds. A failing target (e.g. `int64` with `-out-lua`) no longer leaves partially updated files on disk.
-- **`Message.MinWireSize()`**: now accounts for bool bit-packing, matching the layout generators emit; the generators use this single implementation.
-- **Parser error messages**: removed duplicated `struct X:` / `field Y:` prefixes.
-- **Conditional `encoding/binary` import**: Go generated code only imports `encoding/binary` when needed (quantized 16-bit fields, slices, non-byte primitives).
-- **Go package name validation**: The `-out-go` directory name is now validated as a valid Go package identifier. Invalid names (e.g., keywords, names with dots) fall back to the schema's package name.
-- **TS/Lua nested struct variable naming**: Fixed invalid TypeScript destructuring identifiers and Lua variable names when nested structs appear inside fixed arrays (e.g., `[3]NestedStruct`).
-- **C# enum value names**: enum-type-prefix stripping removed entirely — C# enum member names now always match the schema (and TypeScript) verbatim. Previously stripping could produce invalid identifiers (leading digits) or colliding members.
-- **Lua bounds checking**: `check_bounds` calls are now wired into all primitive deserialize paths for defense-in-depth.
-- **Go string decode**: generated code compares incoming bytes with the existing field value via `string(bytes)` directly; the `arpackStringEqualBytes` helper is no longer emitted. The Go compiler performs this comparison without allocating, so identical strings still reuse existing storage. Regenerate Go outputs.
-- **TypeScript slice serialization**: slices are serialized with an index loop instead of `for...of`; nested element temporaries are named per field. Wire format unchanged.
-- **Parser type resolution**: named type chains (`type A B; type B uint16`) and aliases are resolved through `go/types` instead of a hand-written fixpoint pass. Behavior is unchanged for previously accepted schemas.
-- **CLI output writes**: generated files are written with a plain `os.WriteFile`; the temp-file/backup/rollback machinery was removed. All targets are still generated in memory before any file is written, so a failing target never touches disk.
-- **Generator internals**: removed duplicated per-language code paths (~1000 lines): TypeScript `*Element` copies, repeated `Field` element copies, seven schema-walker pairs (now a single `anyField`), and no-op wrappers. Generated output is identical except for the two items above.
-- **Benchmarks**: README numbers refreshed (Go, Apple M3 Max, 5 runs); the Unity benchmark C# code is regenerated with the current API and `BenchmarkRunner.cs` uses the new `Serialize`/`Deserialize` signatures.
+Go, Apple M3 Max, 5 runs (`make bench-stats`):
 
-### Added
+| Benchmark | 1.0.2 | 1.1.0 |
+| --- | ---: | ---: |
+| ArPack Marshal | 9.4 ns/op, 0 allocs | 9.0 ns/op, 0 allocs |
+| ArPack Unmarshal | 32.8 ns/op, 40 B, 2 allocs | 25.0 ns/op, 40 B, 2 allocs |
 
-- **Boundary-value e2e tests**: Added `QuantTestMessage` to test schemas and `TestE2E_QuantBoundaryValues` that verifies all four languages produce identical wire output for edge-case quantized values.
-- **Non-Go-pivot e2e tests**: Added `TestE2E_NonGoPivot` for C#↔TS, C#↔Lua, and TS↔Lua roundtrip tests.
-- **Truncated-input e2e tests**: Added `TestE2E_TruncatedInput` that verifies each language's deserializer errors on empty/truncated input rather than producing garbage or panicking.
-- **`generator.ToSnakeCase`**: exported and shared by the Lua generator and the CLI.
-- **GameMaker Language target**: `-out-gml` generates GML serializers (contributed in PR #1).
-- **Multiple schema inputs**: `-in` is repeatable and files may live in different packages; `-name` sets the output base name, defaulting to the first input file (PR #1, #2).
+Unmarshal ~25% faster: string fields now compare incoming bytes with `m.Field != string(bytes)` (compiler-optimized, no allocation) instead of the emitted `arpackStringEqualBytes` helper. Regenerate Go outputs. Protobuf/FlatBuffers baselines moved ~10-14% in the same run, so part of the gain is run-to-run variance.
 
-### Removed
+### Breaking
 
-- `parser.Message.PackageName` (use `parser.Schema.PackageName`) and `parser.Field.CSharpTypeName`.
+- **C# `Serialize`/`Deserialize` take `int length`** and bounds-check every read and write; an undersized buffer throws `ArgumentException` instead of corrupting memory. `msg.Serialize(ptr)` → `msg.Serialize(ptr, buf.Length)`, `X.Deserialize(ptr, out msg)` → `X.Deserialize(ptr, data.Length, out msg)`.
+- **C#/TS output filenames** keep internal casing and only uppercase the first letter (`netMsg.go` → `NetMsg.gen.cs`, was `Netmsg.gen.cs`). Delete old-cased files to avoid duplicate definitions.
+- **C# enum members** match the schema verbatim; type-prefix stripping removed (it could produce invalid or colliding identifiers).
+- **API removed**: `parser.Message.PackageName` (use `parser.Schema.PackageName`), `parser.Field.CSharpTypeName`, namespace parameter of `GenerateTypeScriptSchema`.
+
+### Key changes
+
+- **Wire parity for quantized floats**: all targets use float64 arithmetic with truncation toward zero. C# used 32-bit literals and Lua used `math.floor`, diverging on negative values.
+- **GameMaker Language target**: `-out-gml` (PR #1).
+- **Multiple schema inputs**: `-in` is repeatable, files may live in different packages; `-name` sets the output base name, defaulting to the first input file (PR #1, #2).
+- **Atomic multi-target output**: all targets are generated in memory and written only if every target succeeds.
+- **Parser**: rejects nested collections (`[][]T`, `[3][]T`) and embedded struct fields with clear errors; enum-only schemas allowed (Go target skipped, other targets emit enums); named type chains and aliases resolved through `go/types`.
+- **Lua bounds checking**: `check_bounds` on all primitive deserialize paths.
+- **e2e tests**: quantized boundary values across all targets, non-Go-pivot roundtrips (C#↔TS, C#↔Lua, TS↔Lua), truncated input errors instead of garbage or panics.
+
+### Other
+
+- `Message.MinWireSize()` accounts for bool bit-packing; generators share the single implementation.
+- Go: `encoding/binary` imported only when needed.
+- `-out-go` directory name validated as a Go package identifier; invalid names fall back to the schema package name.
+- TS/Lua: valid identifiers for nested structs inside fixed arrays (`[3]Nested`).
+- TS: slices serialized with an index loop; wire format unchanged.
+- Parser errors no longer repeat `struct X:` / `field Y:` prefixes.
+- `generator.ToSnakeCase` exported, shared by the Lua generator and the CLI.
+- CLI writes files with plain `os.WriteFile`; temp-file/backup/rollback machinery removed.
+- Generator internals: ~1000 lines of duplicated per-language code removed; generated output unchanged.
+- Benchmarks: README numbers refreshed; Unity benchmark regenerated for the new C# API.
