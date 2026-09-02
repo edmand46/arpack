@@ -354,7 +354,7 @@ func parseFieldType(
 		if err != nil {
 			return Field{}, fmt.Errorf("map key: %w", err)
 		}
-		if key.Kind != KindPrimitive || !(key.Primitive == KindString || IsIntegralPrimitive(key.Primitive)) {
+		if key.Kind != KindPrimitive || (key.Primitive != KindString && !IsIntegralPrimitive(key.Primitive)) {
 			return Field{}, fmt.Errorf("map key must be string, explicit-width integer, or enum, got %s", key.GoTypeName())
 		}
 		elem, err := parseFieldType("", t.Value, rawTag, knownStructs, namedPrimitives, unsupportedNamedPrimitives, info)
